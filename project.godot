@@ -1,0 +1,45 @@
+; Engine configuration file.
+; STRAIN: low-poly, low-res microbial deck-battler.
+
+config_version=5
+
+[application]
+
+config/name="STRAIN"
+config/description="A sealed lab. A cut palm. Something green under the skin."
+run/main_scene="res://scenes/title/title.tscn"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[autoload]
+
+Game="*res://scripts/autoload/game.gd"
+Cards="*res://scripts/autoload/cards.gd"
+Lore="*res://scripts/autoload/lore.gd"
+UI="*res://scripts/autoload/ui.gd"
+
+[display]
+
+window/size/viewport_width=384
+window/size/viewport_height=216
+window/size/window_width_override=1152
+window/size/window_height_override=648
+window/stretch/mode="viewport"
+window/stretch/aspect="keep"
+window/stretch/scale_mode="integer"
+
+[gui]
+
+common/snap_controls_to_pixels=true
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/canvas_textures/default_texture_filter=0
+textures/default_filters/use_nearest_mipmap_filter=true
+anti_aliasing/quality/msaa_3d=0
+anti_aliasing/quality/msaa_2d=0
+2d/snap/snap_2d_transforms_to_pixel=true
+2d/snap/snap_2d_vertices_to_pixel=true
+environment/defaults/default_clear_color=Color(0, 0, 0, 1)
