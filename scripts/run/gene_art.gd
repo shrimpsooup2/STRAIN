@@ -10,28 +10,81 @@ const C_PASSIVE := Color("9888c0")
 const C_JUNK := Color("6a7a30")
 
 
-static func gene_color(id: String) -> Color:
-	var c: Dictionary = Cards.card(id)
-	if c.get("green", false):
-		return UI.C_GREEN
-	match String(c.get("kind", "gene")):
-		"junk":
-			return C_JUNK
-		"passive":
-			return C_PASSIVE
+## Gene category by base id: "dmg" | "film" | "heal" | "chorus" | "util" | "passive" | "junk".
+const CAT := {
+	"lyse": "dmg", "swarm": "dmg", "spike": "dmg", "siphon": "dmg", "rot": "dmg",
+	"needle": "dmg", "lance": "dmg", "cascade": "dmg", "fever": "dmg", "bloom": "dmg",
+	"drifter": "dmg", "hopper": "dmg",
+	"film": "film", "membrane": "film", "sporewall": "film", "clot": "film", "cyst": "film",
+	"mirror": "film", "terminator": "film",
+	"divide": "heal",
+	"signal": "chorus", "harmonic": "chorus", "hymn": "chorus", "sing": "chorus",
+	"drone": "chorus", "chant": "chorus", "silence": "chorus", "whisper": "chorus",
+	"shriek": "chorus", "lullaby": "chorus", "feedback": "chorus", "hush": "chorus",
+	"quorum": "chorus", "crescendo": "chorus",
+	"promoter": "util", "catalyst": "util", "splicer": "util", "invert": "util",
+	"pull": "util", "spore": "util", "primer": "util", "echo": "util", "proofread": "util",
+	"ledger": "util", "tripwire": "util", "relay": "util",
+	"pact_coil": "passive", "thick_wall": "passive",
+	"g_lash": "dmg", "g_root": "film", "g_chorus": "chorus", "g_bloom": "heal", "g_weave": "util",
+	"overgrowth": "junk", "scab_plate": "junk",
+}
+
+
+## Category of a gene id ("+" upgrades share their base's category).
+static func gene_cat(id: String) -> String:
+	var b: String = Cards.base_id(id)
+	if CAT.has(b):
+		var cat: String = CAT[b]
+		return cat
+	var c: Dictionary = Cards.card(b)
+	var kind: String = String(c.get("kind", "gene"))
+	if kind == "junk" or kind == "passive":
+		return kind
 	var fx: Array = c.get("fx", [])
 	if fx.is_empty():
-		return C_UTIL
-	match String(fx[0]["t"]):
-		"dmg", "dmg_chorus", "drain", "drifter", "rot":
+		return "util"
+	var first: Dictionary = fx[0]
+	match String(first.get("t", "")):
+		"dmg", "dmg_chorus", "drain", "drifter", "rot", "stagger_dmg":
+			return "dmg"
+		"film":
+			return "film"
+		"heal":
+			return "heal"
+		"chorus", "if_chorus", "sing", "silence", "feedback", "lull":
+			return "chorus"
+	return "util"
+
+
+static func cat_color(cat: String) -> Color:
+	match cat:
+		"dmg":
 			return C_DMG
 		"film":
 			return C_FILM
 		"heal":
 			return C_HEAL
-		"chorus", "if_chorus":
+		"chorus":
 			return C_CHORUS
+		"passive":
+			return C_PASSIVE
+		"junk":
+			return C_JUNK
 	return C_UTIL
+
+
+static func gene_color(id: String) -> Color:
+	if Cards.is_green(id):
+		return UI.C_GREEN
+	return cat_color(gene_cat(id))
+
+
+## 7x7 glyphs for gene modes / enemy marks, drawn with bitmap().
+const GLYPH_LOUD := ["...#...", "..##.#.", "####..#", "####..#", "####..#", "..##.#.", "...#..."]
+const GLYPH_QUIET := ["...#...", "..##...", "####...", "####.#.", "####...", "..##...", "...#..."]
+const GLYPH_TEETH := ["#######", "#.#.#.#", ".......", ".......", ".......", "#.#.#.#", "#######"]
+const GLYPH_KNOT := ["#.....#", "##...##", "###.###", "...#...", "###.###", "##...##", "#.....#"]
 
 
 ## Draw 8px pixel text with its top-left corner at `pos`.

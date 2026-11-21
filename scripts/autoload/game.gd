@@ -11,6 +11,7 @@ const SCENES := {
 	"battle": "res://scenes/battle/battle.tscn",
 	"dream": "res://scenes/dream/dream.tscn",
 	"ending": "res://scenes/ending/ending.tscn",
+	"culture": "res://scenes/culture/culture.tscn",
 }
 
 const REGIONS := ["wound", "rivers", "hollow", "archive"]
@@ -22,7 +23,7 @@ const REGION_NAMES := {
 const REGION_REWARD_TEXT := {
 	"wound": "STEADY HANDS: bench work costs less.",
 	"rivers": "The spread slows. Clock pushed back.",
-	"hollow": "Breath comes easier. +1 BREATH.",
+	"hollow": "Breath comes easier. +1 BREATH. First clear: CANTOR strain.",
 	"archive": "Something comes back to you.",
 	"root": "",
 }
@@ -70,6 +71,13 @@ var treated_today := false
 var supply_taken_day := 0
 var ending := ""
 var flags: Dictionary = {}
+var materials: Dictionary = {"clot": 0, "plasma": 0, "alveoli": 0, "myelin": 0}  ## tissue brought back from runs
+## The culture prepared at the bench between runs (see scenes/culture).
+##   grown: adaptation ids available to equip (crafted or found as specimens)
+##   traits: equipped adaptation ids (≤ trait_slots), active from the start of every run
+##   boosters: prepared booster ids (≤ 2), carried into the next run and consumed
+##   pitch: starting Chorus offset per fight (0..6)
+var culture: Dictionary = {"grown": [], "traits": [], "trait_slots": 1, "boosters": [], "pitch": 0}
 var run: Dictionary = {}             ## current run; empty when in the lab
 
 var _scene_busy := false
@@ -102,6 +110,9 @@ func _register_input() -> void:
 	_add_keys("menu", [KEY_TAB, KEY_C])
 	_add_keys("end_turn", [KEY_E])
 	_add_keys("mutate", [KEY_R])
+	_add_keys("splice", [KEY_Q])
+	_add_keys("help", [KEY_H, KEY_F1])
+	_add_keys("inject", [KEY_F])
 	# Buttons respond to ui_accept/ui_cancel: let Z / X drive them too.
 	_add_keys("ui_accept", [KEY_Z])
 	_add_keys("ui_cancel", [KEY_X])
@@ -155,6 +166,8 @@ func new_game() -> void:
 	treated_today = false
 	supply_taken_day = 0
 	ending = ""
+	materials = {"clot": 0, "plasma": 0, "alveoli": 0, "myelin": 0}
+	culture = {"grown": [], "traits": [], "trait_slots": 1, "boosters": [], "pitch": 0}
 	flags = {}
 	run = {}
 	breath = breath_max()
@@ -166,7 +179,7 @@ func _state_keys() -> Array:
 		"thoughts", "powered", "regions", "cleared_once", "memories", "pending_dream",
 		"leash_pages", "unlocked", "gene_bank", "bank_slots", "strain", "strains", "start_order",
 		"last_failed_strand", "hollow_bonus", "extra_breath", "steady_hands", "treated_today",
-		"supply_taken_day", "ending", "flags"]
+		"supply_taken_day", "ending", "flags", "materials", "culture"]
 
 
 func save_game() -> void:
@@ -332,27 +345,94 @@ func starting_strand() -> Array:
 	return base.duplicate() + gene_bank.duplicate()
 
 
-func start_run(region: String) -> void:
+## opts (Injection screen, §13): max_colony, colony, fray, uptake, start_row, pitch,
+## boosters[], adapt[], adapt_rare (int), genes[], unfade (bool), site (String).
+## Culture traits/boosters/pitch are folded in here; prepared boosters are consumed.
+func start_run(region: String, opts: Dictionary = {}) -> void:
 	var is_root := region == "root"
+	var mx: int = maxi(1, int(opts.get("max_colony", START_COLONY)))
+	var col: int = clampi(int(opts.get("colony", mx)), 1, mx)
+	var strand: Array = starting_strand()
+	var genes: Array = opts.get("genes", [])
+	for g in genes:
+		strand.append(String(g))
+	var boosters: Array = []
+	var prepared: Array = culture.get("boosters", [])
+	for b in prepared:
+		boosters.append(String(b))
+	var extra_b: Array = opts.get("boosters", [])
+	for b in extra_b:
+		boosters.append(String(b))
+	culture["boosters"] = []
 	run = {
 		"region": region,
 		"is_root": is_root,
 		"growth": 3 if is_root else int(regions.get(region, 1)),
-		"strand": starting_strand(),
-		"colony": START_COLONY,
-		"max_colony": START_COLONY,
-		"fray": 0,
+		"strand": strand,
+		"colony": col,
+		"max_colony": mx,
+		"fray": maxi(0, int(opts.get("fray", 0))),
 		"ledger": [],
-		"uptake": 0,
+		"uptake": maxi(0, int(opts.get("uptake", 0))),
 		"reagent": 0,
 		"row": -1,
 		"col": -1,
-		"nodes": _make_nodes(is_root),
+		"path": [],
+		"nodes": _make_nodes(region),
 		"battle": {},
 		"result": "",
+		"adapt": [],
+		"boosters": boosters,
+		"pitch": int(culture.get("pitch", 0)) + int(opts.get("pitch", 0)),
+		"tissue": {},
+		"unfade": bool(opts.get("unfade", false)),
+		"site": String(opts.get("site", "")),
+		"shop": {},
 	}
+	# Adaptations: equipped culture traits, then site extras, then random rares.
+	var want: Array = []
+	var traits: Array = culture.get("traits", [])
+	for id in traits:
+		if not want.has(String(id)):
+			want.append(String(id))
+	var extra_a: Array = opts.get("adapt", [])
+	for id in extra_a:
+		if not want.has(String(id)):
+			want.append(String(id))
+	for id in want:
+		Adapt.gain(id)
+	var rares: int = int(opts.get("adapt_rare", 0))
+	if rares > 0:
+		var picks: Array = Adapt.offers(rares, "rare", Adapt.owned())
+		for id in picks:
+			Adapt.gain(String(id))
+	# Start further up the map: earlier rows count as already walked.
+	var start_row: int = int(opts.get("start_row", 0))
+	if start_row > 0:
+		_prefill_path(start_row)
 	flags["in_run"] = true
 	save_game()
+
+
+## Walks a random linked path through rows 0..start_row-1 and marks them passed.
+func _prefill_path(start_row: int) -> void:
+	var nodes: Array = run["nodes"]
+	var last := mini(start_row, nodes.size() - 1) - 1
+	if last < 0:
+		return
+	var path: Array = []
+	var first_row: Array = nodes[0]
+	var c := randi() % first_row.size()
+	path.append(c)
+	for r in range(1, last + 1):
+		var prev_row: Array = nodes[r - 1]
+		var prev: Dictionary = prev_row[c]
+		var links: Array = prev.get("links", [0])
+		c = int(links[randi() % links.size()])
+		path.append(c)
+	run["path"] = path
+	run["row"] = last
+	run["col"] = c
 
 
 ## A run that was quit mid-way (closed the game) counts as a failed culture.
@@ -363,29 +443,198 @@ func resolve_abandoned_run() -> void:
 	end_day(0)
 
 
-## Rows of node types. Each row: 1–2 options. Last row is the boss.
-func _make_nodes(is_root: bool) -> Array:
-	if is_root:
-		return [["fight"], ["rest"], ["elite", "fight"], ["rest"], ["boss"]]
-	var rows: Array = [["fight"]]
-	var pool := ["fight", "rest", "event"]
-	for i in 3:
-		var a: String = pool[randi() % pool.size()]
-		var b: String = pool[randi() % pool.size()]
-		if a == b:
-			b = "fight" if a != "fight" else "event"
-		rows.append([a, b] if i != 1 else [a, b, "elite"])
-	rows.append(["boss"])
+## Map rows, bottom to top. Each node: {"type", "enemy", "event", "links": [cols in next row]}.
+## Types: fight, elite, rest, event, lesion (shop), cyst (treasure), needle, boss.
+## Normal regions: 7 rows of 2-4 nodes, then the heart. Links never cross.
+func _make_nodes(region: String) -> Array:
+	if region == "root":
+		var rr: Array = [
+			[_node("fight", region, [0])],
+			[_node("rest", region, [0, 1])],
+			[_node("elite", region, [0]), _node("fight", region, [0])],
+			[_node("rest", region, [0])],
+			[_node("boss", region, [])],
+		]
+		return rr
+	var sizes: Array = [randi_range(2, 3)]
+	for i in 5:
+		sizes.append(randi_range(2, 4))
+	sizes.append(randi_range(2, 3))
+	sizes.append(1)
+	# Types.
+	var types: Array = []
+	for r in sizes.size():
+		var row_t: Array = []
+		var n: int = sizes[r]
+		for c in n:
+			var t := "fight"
+			if r == sizes.size() - 1:
+				t = "boss"
+			elif r == sizes.size() - 2:
+				t = "rest"
+			elif r >= 1:
+				t = _roll_type(r, row_t)
+			row_t.append(t)
+		types.append(row_t)
+	# Guarantees: one elite, one lesion, one needle in the middle rows.
+	_force_type(types, "elite", 2, 5)
+	_force_type(types, "lesion", 2, 4)
+	_force_type(types, "needle", 2, 5)
+	_cap_type(types, "needle", 1)
+	_cap_type(types, "lesion", 2)
+	# Links.
+	var links: Array = []
+	for r in sizes.size() - 1:
+		links.append(_row_links(int(sizes[r]), int(sizes[r + 1])))
+	links.append([[]])
+	# Build.
+	var used_events: Array = []
+	var rows: Array = []
+	for r in sizes.size():
+		var row_n: Array = []
+		var row_t: Array = types[r]
+		var row_l: Array = links[r]
+		for c in row_t.size():
+			var t: String = row_t[c]
+			var nd := _node(t, region, row_l[c])
+			if t == "event":
+				var eid := _pick_event(region, used_events)
+				if eid == "":
+					nd = _node("fight", region, row_l[c])
+				else:
+					nd["event"] = eid
+					used_events.append(eid)
+			row_n.append(nd)
+		rows.append(row_n)
 	return rows
+
+
+func _node(type: String, region: String, links: Array) -> Dictionary:
+	var re: Dictionary = Cards.REGION_ENEMIES.get(region, Cards.REGION_ENEMIES["wound"])
+	var enemy := ""
+	match type:
+		"fight":
+			var normal = re.get("normal", [])
+			if normal is Array and not (normal as Array).is_empty():
+				enemy = String((normal as Array)[randi() % (normal as Array).size()])
+			else:
+				enemy = String(normal)
+		"elite":
+			var elite = re.get("elite", "")
+			if elite is Array and not (elite as Array).is_empty():
+				enemy = String((elite as Array)[randi() % (elite as Array).size()])
+			else:
+				enemy = String(elite)
+		"boss":
+			enemy = String(re.get("boss", ""))
+	return {"type": type, "enemy": enemy, "event": "", "links": links.duplicate()}
+
+
+## Weighted pick for a middle row. Keeps events and cysts spread (max 1 each per row).
+func _roll_type(r: int, row_t: Array) -> String:
+	var bag: Array = ["fight", "fight", "fight", "fight", "fight", "event", "event"]
+	if r >= 2:
+		bag.append("elite")
+	if r >= 2 and r <= 4:
+		bag.append("rest")
+	if r >= 2:
+		bag.append("cyst")
+	for t in ["event", "cyst", "elite", "rest"]:
+		if row_t.has(t):
+			while bag.has(t):
+				bag.erase(t)
+	return String(bag[randi() % bag.size()])
+
+
+## Make sure at least one node of `type` exists in rows lo..hi (turns a fight into it).
+func _force_type(types: Array, type: String, lo: int, hi: int) -> void:
+	var spots: Array = []
+	for r in range(lo, mini(hi, types.size() - 3) + 1):
+		var row_t: Array = types[r]
+		if row_t.has(type):
+			return
+		for c in row_t.size():
+			if row_t[c] == "fight":
+				spots.append(Vector2i(r, c))
+	if spots.is_empty():
+		return
+	var s: Vector2i = spots[randi() % spots.size()]
+	var row_s: Array = types[s.x]
+	row_s[s.y] = type
+
+
+## At most `cap` nodes of `type` in the whole map; extras become fights.
+func _cap_type(types: Array, type: String, cap: int) -> void:
+	var seen := 0
+	for row_t in types:
+		var rt: Array = row_t
+		for c in rt.size():
+			if rt[c] == type:
+				seen += 1
+				if seen > cap:
+					rt[c] = "fight"
+
+
+## Non-crossing links between a row of n nodes and a row of m: a monotone staircase.
+## Every node gets an edge in and out; each node links to 1-2 nodes ahead.
+func _row_links(n: int, m: int) -> Array:
+	var out: Array = []
+	for i in n:
+		out.append([])
+	var i := 0
+	var j := 0
+	(out[0] as Array).append(0)
+	while i < n - 1 or j < m - 1:
+		var cand: Array = []
+		var li: Array = out[i]
+		# advance j: node i takes a second link.
+		if j < m - 1 and li.size() < 2 and (m - 2 - j) <= 2 * (n - 1 - i):
+			cand.append("j")
+		# advance both.
+		if i < n - 1 and j < m - 1 and (m - 2 - j) <= 1 + 2 * (n - 2 - i):
+			cand.append("b")
+			cand.append("b")
+		# advance i: next node shares node j.
+		if i < n - 1 and (m - 1 - j) <= 1 + 2 * (n - 2 - i):
+			cand.append("i")
+		if cand.is_empty():
+			break
+		var step: String = cand[randi() % cand.size()]
+		if step != "i":
+			j += 1
+		if step != "j":
+			i += 1
+		(out[i] as Array).append(j)
+	return out
+
+
+func _pick_event(region: String, exclude: Array) -> String:
+	var path := "res://scripts/run/events.gd"
+	if not ResourceLoader.exists(path):
+		return ""
+	var ev: Script = load(path)
+	return String(ev.pick(region, stage, day, exclude))
 
 
 ## Called by the run layer when the run is over. won=true means the region boss fell.
 ## For the Root, `root_result` is "destroy" (→ purge) or "bind" (→ graft).
+## Tissue: a won run banks all of `run.tissue`, a lost run half (floor). Shown as a toast
+## and kept in flags["last_bank"].
 func finish_run(won: bool, root_result := "") -> void:
 	var region: String = run.get("region", "")
 	var uptake: int = run.get("uptake", 0)
+	var parts := PackedStringArray()
+	var tissue: Dictionary = run.get("tissue", {})
+	for mat in tissue.keys():
+		var n: int = int(tissue[mat])
+		if not won:
+			n = n / 2
+		if n > 0:
+			materials[mat] = int(materials.get(mat, 0)) + n
+			parts.append("%d %s" % [n, String(mat).to_upper()])
+	var run_reagent: int = int(run.get("reagent", 0))
 	if won:
-		reagent += int(run.get("reagent", 0))
+		reagent += run_reagent
 		for id in run.get("strand", []):
 			if Cards.is_green(id):
 				green_samples += 1
@@ -398,7 +647,13 @@ func finish_run(won: bool, root_result := "") -> void:
 			_region_reward(region, first)
 	else:
 		last_failed_strand = (run.get("strand", []) as Array).duplicate()
-		reagent += int(run.get("reagent", 0)) / 2
+		run_reagent = run_reagent / 2
+		reagent += run_reagent
+	if run_reagent > 0:
+		parts.append("%d REAGENT" % run_reagent)
+	var bank_text := "BANKED: " + (", ".join(parts) if parts.size() > 0 else "NOTHING")
+	flags["last_bank"] = bank_text
+	UI.toast(bank_text, UI.C_INK)
 	run = {}
 	flags.erase("in_run")
 	end_day(uptake)
@@ -443,6 +698,8 @@ func _region_reward(region: String, first: bool) -> void:
 		"hollow":
 			if first:
 				hollow_bonus = 1
+				if not strains.has("cantor"):
+					strains.append("cantor")
 			extra_breath += 1
 		"archive":
 			if memories < 4:
@@ -476,19 +733,26 @@ func _user_args() -> Dictionary:
 	return out
 
 
+## Kinds: run, battle, boss, root, midgame, late, rich, and the run_map screens
+## shop / event / reward / cyst / needle / rest (use with --scene=run_map;
+## --event=<id> forces a specific event).
 func debug_setup(kind: String) -> void:
 	new_game()
 	match kind:
 		"run":
+			culture["traits"] = ["pellicle", "scar_tissue"]
+			culture["trait_slots"] = 2
+			culture["boosters"] = ["clotter"]
 			start_run("wound")
 		"battle":
 			start_run(args_region())
-			run["row"] = 0
-			run["col"] = 0
-			run["battle"] = {"kind": "fight"}
+			_debug_walk(0)
+			run["battle"] = {"kind": "fight", "enemy": _debug_node()["enemy"]}
 		"boss":
 			start_run(args_region())
-			run["battle"] = {"kind": "boss"}
+			var nodes: Array = run["nodes"]
+			_debug_walk(nodes.size() - 1)
+			run["battle"] = {"kind": "boss", "enemy": _debug_node()["enemy"]}
 		"root":
 			for r in REGIONS:
 				cleared_once[r] = true
@@ -496,23 +760,84 @@ func debug_setup(kind: String) -> void:
 			green_samples = 3
 			powered = {"bench": true, "generator": true, "garden": true}
 			start_run("root")
-			run["battle"] = {"kind": "boss"}
+			var rnodes: Array = run["nodes"]
+			_debug_walk(rnodes.size() - 1)
+			run["battle"] = {"kind": "boss", "enemy": _debug_node()["enemy"]}
 		"midgame":
-			day = 9
-			stage = 2
-			stage_progress = 40.0
-			reagent = 12
-			powered = {"bench": true, "generator": true, "medbay": true, "cctv": true}
-			cleared_once = {"wound": true}
-			regions["wound"] = 0
-			lore = {"vial": 1, "whiteboard": 1, "badge": 1, "binder": 3}
+			_debug_midgame()
+		"rich":
+			_debug_midgame()
+			reagent = 20
+			materials = {"clot": 5, "plasma": 5, "alveoli": 5, "myelin": 5}
+			strains = ["scrubber", "courier", "lytic", "cantor"]
+			culture["grown"] = ["pellicle", "quorum_sense", "scar_tissue", "tuning_fork"]
+			culture["traits"] = ["pellicle"]
+			culture["boosters"] = ["saline", "clotter"]
+			flags["specimens"] = ["pellicle", "quorum_sense"]
+			flags["found"] = {"pellicle": true, "quorum_sense": true, "drawer": true, "cabinet": true, "key": true}
+		"shop", "event", "reward", "cyst", "needle", "rest":
+			culture["traits"] = ["pellicle"]
+			culture["boosters"] = ["clotter"]
+			start_run(args_region())
+			run["reagent"] = 14
+			run["tissue"] = {Cards.REGION_TISSUE.get(args_region(), "clot"): 3}
+			_debug_walk(1)
+			if kind == "reward":
+				var re: Dictionary = Cards.REGION_ENEMIES.get(args_region(), Cards.REGION_ENEMIES["wound"])
+				var el = re.get("elite", "")
+				var eid: String = String((el as Array)[0]) if el is Array else String(el)
+				run["pending_reward"] = {"kind": "elite", "enemy": eid}
+			else:
+				run["debug_open"] = kind
+				run["debug_event"] = String(_user_args().get("event", ""))
 		"late":
 			day = 18
 			stage = 4
 			stage_progress = 50.0
 			reagent = 20
 			powered = {"bench": true, "generator": true, "medbay": true, "cctv": true, "comms": true, "garden": true}
+	if kind in ["battle", "boss", "root"]:
+		var ua := _user_args()
+		flags["tutorial_done"] = not ua.has("tut")
+		if ua.has("enemy") and Cards.ENEMIES.has(String(ua["enemy"])):
+			run["battle"]["enemy"] = String(ua["enemy"])
 	breath = breath_max()
+
+
+func _debug_midgame() -> void:
+	day = 9
+	stage = 2
+	stage_progress = 40.0
+	reagent = 12
+	powered = {"bench": true, "generator": true, "medbay": true, "cctv": true}
+	cleared_once = {"wound": true}
+	regions["wound"] = 0
+	lore = {"vial": 1, "whiteboard": 1, "badge": 1, "binder": 3}
+
+
+## Debug: mark rows 0..to_row as walked along links, ending on that row.
+func _debug_walk(to_row: int) -> void:
+	var nodes: Array = run["nodes"]
+	var path: Array = []
+	var c := 0
+	for r in range(0, mini(to_row, nodes.size() - 1) + 1):
+		if r > 0:
+			var prev_row: Array = nodes[r - 1]
+			var prev: Dictionary = prev_row[c]
+			var links: Array = prev.get("links", [0])
+			c = int(links[0]) if links.size() > 0 else 0
+		path.append(c)
+	run["path"] = path
+	run["row"] = path.size() - 1
+	run["col"] = c
+
+
+func _debug_node() -> Dictionary:
+	var nodes: Array = run["nodes"]
+	var r: int = clampi(int(run.get("row", 0)), 0, nodes.size() - 1)
+	var row_n: Array = nodes[r]
+	var c: int = clampi(int(run.get("col", 0)), 0, row_n.size() - 1)
+	return row_n[c]
 
 
 func args_region() -> String:

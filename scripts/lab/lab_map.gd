@@ -70,6 +70,7 @@ var _glows: Array = []          ## [MeshInstance3D, room id] screens/lamps lit w
 var _badge: Node3D
 var _t := 0.0
 var _alarm := false
+var _finds: Dictionary = {}     ## find id -> [Node3D, tiles] (removed on pickup)
 
 
 # ------------------------------------------------------------ queries
@@ -445,6 +446,7 @@ func _build_props() -> void:
 	_props_garden()
 	_props_comms()
 	_props_airlock()
+	_props_finds()
 
 
 func _props_lab() -> void:
@@ -517,6 +519,21 @@ func remove_badge() -> void:
 	objs.erase(Vector2i(6, 16))
 
 
+## Take a found prop out of the world (jar, sheet, dish). Its tiles stop being interactable.
+func remove_find(id: String) -> void:
+	if not _finds.has(id):
+		return
+	var e: Array = _finds[id]
+	var n: Node3D = e[0]
+	var tiles: Array = e[1]
+	if is_instance_valid(n):
+		n.queue_free()
+	for t in tiles:
+		if objs.get(t, "") == id:
+			objs.erase(t)
+	_finds.erase(id)
+
+
 func _props_medbay() -> void:
 	# Scanner bed under an arch.
 	_b(Vector3(0.8, 0.5, 1.8), Color("c8d4d8"), Vector3(15.0, 0.25, 13.5))
@@ -528,7 +545,10 @@ func _props_medbay() -> void:
 	_reg("scanner", [Vector2i(15, 13), Vector2i(15, 14)])
 	_b(Vector3(0.8, 1.3, 0.6), Color("d8e0e0"), Vector3(16.0, 0.65, 12.0))
 	_b(Vector3(0.06, 0.3, 0.3), Color("c84040"), Vector3(16.0, 1.0, 12.31))
-	_block([Vector2i(16, 12)])
+	# Keypad on the cabinet door.
+	_b(Vector3(0.14, 0.18, 0.03), Color("303438"), Vector3(15.75, 0.95, 12.31))
+	_glow(_b(Vector3(0.08, 0.03, 0.02), Color("e04040") if not Lore.got("cabinet") else Color("40ff60"), Vector3(15.75, 1.0, 12.33), {"unlit": true}), "medbay")
+	_reg("cabinet", [Vector2i(16, 12)])
 	_breaker("medbay", Vector2i(11, 11))
 
 
@@ -697,6 +717,156 @@ func _props_airlock() -> void:
 	_on_wall(Vector3(0.6, 0.4, 0.05), Color("a08848"), 39.0, 0, 1.1)
 	_on_wall(Vector3(0.16, 0.16, 0.07), Color("e8d890"), 39.0, 0, 1.12)
 	_reg("plaque", [Vector2i(39, 0)], false)
+
+
+# ------------------------------------------------------------ finds, locks, night changes
+
+## Gene sheets taped to walls: gene id -> wall tile. Day gates in _sheet_ready().
+const SHEETS := {
+	"cascade": Vector2i(4, 11), "cyst": Vector2i(14, 11), "invert": Vector2i(30, 11),
+	"bloom": Vector2i(34, 11), "lance": Vector2i(7, 0), "mirror": Vector2i(39, 11),
+}
+const PAPER := Color("e8e4d0")
+const JAR_GREEN := Color("70d850")
+
+
+func _find(id: String, tiles: Array, block := true) -> Node3D:
+	var n := Node3D.new()
+	add_child(n)
+	_finds[id] = [n, tiles]
+	_reg(id, tiles, block)
+	return n
+
+
+func _part(n: Node3D, size: Vector3, color: Color, pos: Vector3, opts: Dictionary = {}) -> MeshInstance3D:
+	var m := Retro.box(size, color, pos, opts)
+	n.add_child(m)
+	return m
+
+
+func _jar(n: Node3D, pos: Vector3) -> void:
+	n.add_child(Retro.cyl(0.07, 0.07, 0.18, Color("b8d8d8"), 6, pos + Vector3(0, 0.09, 0), {"alpha": 0.6}))
+	n.add_child(Retro.cyl(0.05, 0.05, 0.1, JAR_GREEN, 6, pos + Vector3(0, 0.06, 0), {"emit": Color(0.1, 0.25, 0.05)}))
+	_part(n, Vector3(0.16, 0.04, 0.16), Color("c8c8c0"), pos + Vector3(0, 0.2, 0))
+
+
+func _sheet_ready(gene: String) -> bool:
+	match gene:
+		"cyst":
+			return Game.day >= 2
+		"bloom":
+			return Game.day >= 4 or Game.stage >= 2
+	return true
+
+
+func _props_finds() -> void:
+	# GENE SHEETS: taped up in a hurry. Gone once taken.
+	for gene in SHEETS.keys():
+		var id := "sheet:%s" % gene
+		if Lore.got(id) or not _sheet_ready(gene):
+			continue
+		var wt: Vector2i = SHEETS[gene]
+		var n := _find(id, [wt], false)
+		var z := wt.y + 0.5 + 0.012
+		_part(n, Vector3(0.34, 0.44, 0.02), PAPER, Vector3(wt.x, 1.05, z))
+		_part(n, Vector3(0.12, 0.04, 0.025), Color("c8b870"), Vector3(wt.x, 1.27, z))
+		for i in 4:
+			_part(n, Vector3(0.24 - (i % 2) * 0.06, 0.02, 0.025), Color("405890"), Vector3(wt.x - 0.02, 1.15 - i * 0.07, z))
+	# DESK 2: a small desk with a locked drawer (key: the coat).
+	_desk(6, 6, 12.0, Color("7c6850"))
+	_b(Vector3(0.6, 0.16, 0.03), Color("62543f"), Vector3(6.0, 0.55, 12.41))
+	_b(Vector3(0.05, 0.05, 0.02), Color("d0c080"), Vector3(6.0, 0.55, 12.43))
+	_reg("desk2", [Vector2i(6, 12)])
+	# FRIDGE in the break room. Something hidden behind the sandwich.
+	_b(Vector3(0.8, 1.6, 0.7), Color("e0e4e0"), Vector3(25.0, 0.8, 12.0))
+	_b(Vector3(0.04, 0.5, 0.04), Color("8898a0"), Vector3(24.7, 1.0, 12.37))
+	_b(Vector3(0.76, 0.02, 0.02), Color("a0a8a8"), Vector3(25.0, 1.1, 12.36))
+	_reg("fridge", [Vector2i(25, 12)])
+	# TOOLBOX behind the fuel drums.
+	var tb := Retro.tex_stripes(Color("b03828"), Color("902c20"), 8, false)
+	_b(Vector3(0.6, 0.3, 0.35), Color.WHITE, Vector3(5.0, 0.15, 4.0), {"tex": tb})
+	_b(Vector3(0.3, 0.04, 0.04), Color("303030"), Vector3(5.0, 0.34, 4.0))
+	_reg("toolbox", [Vector2i(5, 4)])
+	# SECURITY: a steel shelf. A jar on the middle shelf.
+	_b(Vector3(0.5, 1.4, 0.9), Color("68707a"), Vector3(11.2, 0.7, 3.0))
+	for i in 3:
+		_b(Vector3(0.52, 0.03, 0.92), Color("8890a0"), Vector3(11.15, 0.35 + i * 0.4, 3.0))
+	_reg("locker", [Vector2i(11, 3)])
+	if not Lore.got("loose_splice"):
+		_jar(_find("jar:loose_splice", [], false), Vector3(11.0, 0.77, 3.0))
+	# ARCHIVE: a cold box under the drawers' window. Lit with archive power.
+	_b(Vector3(0.8, 0.7, 0.8), Color("c8d8e4"), Vector3(33.0, 0.35, 4.0))
+	_b(Vector3(0.82, 0.06, 0.82), Color("90a0b0"), Vector3(33.0, 0.72, 4.0))
+	_glow(_b(Vector3(0.12, 0.06, 0.02), Color("80c0ff"), Vector3(33.0, 0.5, 4.41), {"unlit": true}), "archive")
+	_reg("coldbox", [Vector2i(33, 4)])
+	# FREEZER: deep store chest at the back.
+	_b(Vector3(1.8, 0.8, 0.8), Color("d8e4ec"), Vector3(30.5, 0.4, 17.0))
+	_b(Vector3(1.7, 0.04, 0.7), Color("a8b8c8"), Vector3(30.5, 0.82, 17.0))
+	_glow(_b(Vector3(0.3, 0.08, 0.02), Color("80c0ff"), Vector3(30.5, 0.6, 16.59), {"unlit": true}), "freezer")
+	_reg("deep", [Vector2i(30, 17), Vector2i(31, 17)])
+	# DECON: return-of-effects tray by the airlock. Shutter down until the end.
+	_b(Vector3(0.6, 1.1, 0.9), Color("687078"), Vector3(35.15, 0.55, 3.0))
+	if Lore.available("decon"):
+		_b(Vector3(0.5, 0.04, 0.7), Color("404850"), Vector3(35.2, 1.12, 3.0))
+		for i in 6:
+			_b(Vector3(0.1, 0.02, 0.13), Color("f0f0f0"), Vector3(35.1 + (i % 2) * 0.18, 1.15, 2.75 + (i / 2) * 0.2))
+	else:
+		var shut := Retro.tex_stripes(Color("e8c840"), Color("282828"), 8, true)
+		_b(Vector3(0.03, 0.3, 0.7), Color.WHITE, Vector3(35.47, 0.9, 3.0), {"tex": shut})
+	_reg("decon", [Vector2i(35, 3)])
+	_night_changes()
+
+
+## Things that moved overnight. You did this. You don't remember.
+func _night_changes() -> void:
+	var d := Game.day
+	if d < 2:
+		# Day 1: the lab stool on its side, a castor gone.
+		var n := _find("chair", [Vector2i(7, 15)])
+		_part(n, Vector3(0.9, 0.06, 0.06), Color("8890a0"), Vector3(7.0, 0.2, 15.0))
+		n.add_child(Retro.cyl(0.2, 0.2, 0.08, Color("303438"), 8, Vector3(7.45, 0.2, 15.0)))
+		_part(n, Vector3(0.06, 0.06, 0.06), Color("4c8838"), Vector3(7.4, 0.26, 15.0))
+	else:
+		# The same stool, set square to the airlock door.
+		var n := _find("n_chair", [Vector2i(37, 3)])
+		_part(n, Vector3(0.06, 0.4, 0.06), Color("8890a0"), Vector3(37.0, 0.2, 3.0))
+		n.add_child(Retro.cyl(0.2, 0.2, 0.08, Color("303438"), 8, Vector3(37.0, 0.44, 3.0)))
+	if d >= 3:
+		# Grey footprints, door to cot.
+		var n := _find("n_soil", [Vector2i(22, 14)], false)
+		var steps := [Vector2(21.1, 12.4), Vector2(21.5, 13.1), Vector2(21.8, 13.8), Vector2(22.2, 14.4),
+			Vector2(22.5, 15.1), Vector2(22.9, 15.7)]
+		for i in steps.size():
+			var s: Vector2 = steps[i]
+			_part(n, Vector3(0.1, 0.008, 0.2), Color("5c5650"), Vector3(s.x + (0.08 if i % 2 == 0 else -0.08), 0.005, s.y))
+	if d >= 5 and not Lore.got("chain_enzyme"):
+		# A dish on the break table, set out for later.
+		var n := _find("n_dish", [Vector2i(21, 15)])
+		n.add_child(Retro.cyl(0.14, 0.14, 0.03, Color("b8d8d8"), 8, Vector3(21.2, 0.76, 15.0), {"alpha": 0.7}))
+		n.add_child(Retro.cyl(0.11, 0.11, 0.02, JAR_GREEN, 8, Vector3(21.2, 0.765, 15.0), {"emit": Color(0.1, 0.25, 0.05)}))
+		_part(n, Vector3(0.2, 0.01, 0.06), Color("e0d8b0"), Vector3(21.2, 0.745, 15.22))
+	if d >= 6:
+		# Tally marks at knee height. One a night.
+		var n := _find("n_tally", [Vector2i(20, 11)], false)
+		var count := mini(d - 1, 20)
+		for i in count:
+			var x := 19.7 + (i % 10) * 0.065 + (i / 5) * 0.03
+			if i % 5 == 4:
+				_part(n, Vector3(0.28, 0.02, 0.02), Color("303030"), Vector3(x - 0.12, 0.4 - (i / 10) * 0.22, 11.52))
+			else:
+				_part(n, Vector3(0.02, 0.16, 0.02), Color("303030"), Vector3(x, 0.4 - (i / 10) * 0.22, 11.52))
+	if d >= 7:
+		# Trial pot 17, carried in from the garden.
+		var n := _find("n_pot", [Vector2i(14, 15)])
+		n.add_child(Retro.cyl(0.17, 0.13, 0.26, Color("8c8880"), 6, Vector3(14.0, 0.13, 15.0)))
+		_part(n, Vector3(0.26, 0.02, 0.26), Color("5c5650"), Vector3(14.0, 0.27, 15.0))
+		_part(n, Vector3(0.05, 0.022, 0.05), Color("201c18"), Vector3(14.03, 0.28, 14.98))
+	if d >= 8:
+		# A stool at the console. The headset coiled on it.
+		var n := _find("n_headset", [Vector2i(29, 3)])
+		_part(n, Vector3(0.06, 0.4, 0.06), Color("8890a0"), Vector3(29.0, 0.2, 3.0))
+		n.add_child(Retro.cyl(0.2, 0.2, 0.08, Color("303438"), 8, Vector3(29.0, 0.44, 3.0)))
+		n.add_child(Retro.cyl(0.12, 0.12, 0.04, Color("202020"), 8, Vector3(29.0, 0.5, 3.0)))
 
 
 # ------------------------------------------------------------ signs

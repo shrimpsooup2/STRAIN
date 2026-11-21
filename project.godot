@@ -17,6 +17,8 @@ Game="*res://scripts/autoload/game.gd"
 Cards="*res://scripts/autoload/cards.gd"
 Lore="*res://scripts/autoload/lore.gd"
 UI="*res://scripts/autoload/ui.gd"
+Adapt="*res://scripts/autoload/adapt.gd"
+Sfx="*res://scripts/autoload/sfx.gd"
 
 [display]
 

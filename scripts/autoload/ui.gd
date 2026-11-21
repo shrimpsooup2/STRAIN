@@ -42,6 +42,9 @@ var _post_mat: ShaderMaterial
 var _toast_layer: CanvasLayer
 var _frame := 0
 var _args := {}
+var _choice_sfx := false      ## true once the choice box has its first focus (move blips on)
+var _choice_cancelled := false
+var _pulse_tw: Tween = null
 
 
 func _ready() -> void:
@@ -198,6 +201,8 @@ func _input(e: InputEvent) -> void:
 		# Choice open: buttons handle accept; we only handle cancel.
 		if e.is_action_pressed("back") and _choice_cancel != -1000:
 			get_viewport().set_input_as_handled()
+			_choice_cancelled = true
+			Sfx.play("cancel")
 			_chosen.emit(_choice_cancel)
 		return
 	if confirm:
@@ -205,6 +210,7 @@ func _input(e: InputEvent) -> void:
 		if _typing:
 			_skip = true
 		else:
+			Sfx.play("blip", 0.8, -4.0)
 			_confirm.emit()
 	elif e.is_action_pressed("back") or e.is_action_pressed("move_up") or e.is_action_pressed("move_down") \
 			or e.is_action_pressed("move_left") or e.is_action_pressed("move_right"):
@@ -246,6 +252,8 @@ func say(lines, style := "see") -> void:
 		lbl.visible_characters = 0
 		var total := lbl.text.length()
 		var t := 0.0
+		var last_blip := 0
+		var blip_pitch := 0.8 if style == "think" else 1.0
 		_typing = true
 		_skip = false
 		while lbl.visible_characters < total:
@@ -254,6 +262,9 @@ func say(lines, style := "see") -> void:
 				break
 			t += get_process_delta_time() * TYPE_SPEED
 			lbl.visible_characters = mini(total, int(t))
+			if lbl.visible_characters - last_blip >= 2:
+				last_blip = lbl.visible_characters
+				Sfx.play("type", blip_pitch * randf_range(0.88, 1.12), -6.0)
 		lbl.visible_characters = -1
 		_typing = false
 		_skip = false
@@ -276,6 +287,8 @@ func say(lines, style := "see") -> void:
 func choose(options: Array, prompt := "", allow_cancel := true, cancel_value := -1) -> int:
 	_open += 1
 	_choice_cancel = cancel_value if allow_cancel else -1000
+	_choice_sfx = false
+	_choice_cancelled = false
 	var prompt_box := {}
 	if prompt != "":
 		prompt_box = _make_box("see")
@@ -310,6 +323,7 @@ func choose(options: Array, prompt := "", allow_cancel := true, cancel_value := 
 		var idx := i
 		b.pressed.connect(func(): _chosen.emit(idx))
 		b.mouse_entered.connect(func(): if not b.disabled: b.grab_focus())
+		b.focus_entered.connect(func(): if _choice_sfx: Sfx.play("blip"))
 		vb.add_child(b)
 		if first == null and not b.disabled:
 			first = b
@@ -317,7 +331,11 @@ func choose(options: Array, prompt := "", allow_cancel := true, cancel_value := 
 	await get_tree().process_frame
 	if first:
 		first.grab_focus()
+	_choice_sfx = true
 	var result: int = await _chosen
+	_choice_sfx = false
+	if not _choice_cancelled:
+		Sfx.play("confirm")
 	p.queue_free()
 	if not prompt_box.is_empty():
 		prompt_box["panel"].queue_free()
@@ -371,6 +389,27 @@ func flash(color: Color, t := 0.15) -> void:
 func set_post(grey := 0.0, tremor := 0.0) -> void:
 	_post_mat.set_shader_parameter("grey", grey)
 	_post_mat.set_shader_parameter("tremor", tremor)
+
+
+## Hurt pulse: tints the screen rim with `color`, then fades. strength ~0.3 graze .. 1.0 heavy.
+func pulse(color := C_BAD, strength := 0.6) -> void:
+	if _pulse_tw != null and _pulse_tw.is_valid():
+		_pulse_tw.kill()
+	var s := clampf(strength, 0.0, 1.5)
+	_post_mat.set_shader_parameter("pulse_color", color)
+	_pulse_tw = create_tween()
+	_pulse_tw.set_ignore_time_scale(true)
+	_pulse_tw.tween_method(_set_pulse, 0.0, s, 0.05)
+	_pulse_tw.tween_method(_set_pulse, s, 0.0, 0.25 + 0.4 * s).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+func _set_pulse(v: float) -> void:
+	_post_mat.set_shader_parameter("pulse", v)
+
+
+## Corner darkening, 0..1 (default 0.22). Dream/lab scenes may want more.
+func set_vignette(v: float) -> void:
+	_post_mat.set_shader_parameter("vignette", clampf(v, 0.0, 1.0))
 
 
 ## The body's current effect on what you see, by infection stage.

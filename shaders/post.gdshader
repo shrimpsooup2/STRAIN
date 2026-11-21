@@ -1,5 +1,6 @@
 // Full-screen retro pass: 15-bit colour with ordered dither, stage-driven "greyout"
-// (everything but green drains), and a 1px tremor.
+// (everything but green drains), a 1px tremor, a soft vignette and a coloured edge pulse
+// (UI.pulse: hurt flashes the rim of the screen).
 shader_type canvas_item;
 
 uniform sampler2D screen_tex : hint_screen_texture, filter_nearest;
@@ -8,6 +9,9 @@ uniform float dither = 1.0;       // 0..1 ordered-dither strength
 uniform float grey = 0.0;         // 0..1 desaturate non-green pixels
 uniform float tremor = 0.0;       // 0..1 chance-ish of a 1px horizontal shake
 uniform vec2 px = vec2(0.0026041667, 0.0046296296);
+uniform float vignette = 0.22;    // 0..1 corner darkening
+uniform float pulse = 0.0;        // 0..1 edge tint strength (animated by UI.pulse)
+uniform vec4 pulse_color : source_color = vec4(0.85, 0.16, 0.16, 1.0);
 
 const float BAYER[16] = {
 	0.0, 8.0, 2.0, 10.0,
@@ -33,6 +37,17 @@ void fragment() {
 		float l = dot(c, vec3(0.299, 0.587, 0.114));
 		float greenness = clamp((c.g - max(c.r, c.b)) * 4.0, 0.0, 1.0);
 		c = mix(c, vec3(l), grey * (1.0 - greenness));
+	}
+
+	vec2 q = (SCREEN_UV - 0.5) * 2.0;
+	float r = length(q);
+	if (vignette > 0.0) {
+		c *= 1.0 - vignette * smoothstep(0.55, 1.4, r);
+	}
+	if (pulse > 0.0) {
+		float edge = smoothstep(0.2, 1.2, r);
+		float k = clamp(pulse * edge, 0.0, 1.0);
+		c = mix(c * (1.0 - 0.35 * k), pulse_color.rgb, k * 0.8);
 	}
 
 	ivec2 p = ivec2(FRAGCOORD.xy) % 4;

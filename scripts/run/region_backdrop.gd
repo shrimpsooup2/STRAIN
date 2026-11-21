@@ -1,12 +1,17 @@
 extends Node3D
 ## Region-themed inner-body backdrop: fogged inverted sphere, fleshy cellular
-## blobs, hanging strands and drifting motes. Add as a child, then `setup(region)`.
+## blobs, hanging strands and drifting, twinkling motes. The fog colour and density
+## breathe slowly. Add as a child, then `setup(region)`.
 
 var _motes: Array = []       ## [MeshInstance3D, base Vector3, speed float, phase float]
 var _blobs: Array = []       ## [MeshInstance3D, base scale float, phase float]
 var _t := 0.0
 var _extent := Vector3(14, 6, 14)
 var _center := Vector3.ZERO
+var _env: Environment = null
+var _fog_base := Color.BLACK
+var _fog_hi := Color.BLACK
+var _fog_density := 0.0
 
 
 ## opts: fog (density), center (Vector3 mote volume centre), extent (Vector3 half-size),
@@ -22,7 +27,13 @@ func setup(region: String, opts: Dictionary = {}) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(opts.get("seed", hash(region)))
 
-	add_child(Retro.environment(bg, fog.lightened(0.35), 0.9, fog, float(opts.get("fog", 0.035))))
+	var we := Retro.environment(bg, fog.lightened(0.35), 0.9, fog, float(opts.get("fog", 0.035)))
+	add_child(we)
+	_env = we.environment
+	if _env != null:
+		_fog_base = _env.fog_light_color
+		_fog_hi = _fog_base.lerp(accent, 0.3).lightened(0.12)
+		_fog_density = _env.fog_density
 	add_child(Retro.sun(Vector3(-50, -30, 0), accent.lerp(Color.WHITE, 0.6), 0.9))
 
 	# Inner wall: an inverted low-poly sphere with a speckled flesh texture.
@@ -92,8 +103,16 @@ func _process(dt: float) -> void:
 		var y := fposmod(base.y - _center.y + _extent.y * 0.3 + _t * spd, _extent.y * 1.3) - _extent.y * 0.3
 		m.position = Vector3(base.x + sin(_t * 0.4 + ph) * 0.4, _center.y + y, base.z + cos(_t * 0.3 + ph) * 0.4)
 		m.rotation.y += dt * spd
+		# Twinkle: motes swell and shrink out of phase; a few nearly vanish.
+		var tw := 0.55 + 0.45 * sin(_t * (1.2 + spd * 3.0) + ph * 3.0)
+		m.scale = Vector3(tw, tw, tw)
 	for e in _blobs:
 		var b: MeshInstance3D = e[0]
 		var s: Vector3 = e[1]
 		var k := 1.0 + sin(_t * 0.6 + float(e[2])) * 0.04
 		b.scale = Vector3(s.x * k, s.y / k, s.z * k)
+	if _env != null:
+		# Slow breath: two incommensurate sines so the pulse never quite repeats.
+		var k := 0.5 + 0.5 * sin(_t * 0.42) * (0.75 + 0.25 * sin(_t * 0.13))
+		_env.fog_light_color = _fog_base.lerp(_fog_hi, k)
+		_env.fog_density = _fog_density * (0.88 + 0.24 * k)

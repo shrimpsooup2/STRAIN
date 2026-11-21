@@ -1,12 +1,39 @@
 extends Node3D
-## Endings. Shown, never explained.
-##   purge  - you scan clean and walk out into the grey. The last seed burns behind you.
-##   root   - you lie down in the test bed and open the vent. Green spreads. So does the risk.
-##   graft  - a leashed seed goes up the vent, you purge, you walk out. It doesn't climb your hand.
-##   fallow - nobody leaves. The wing sterilizes itself.
+## Endings. Shown, then written down once, plainly. Never explained.
+##   purge  - you scan clean and walk out into the grey. It is gone from you, and from the world.
+##   root   - you lie down in the test bed and open the vent. Green spreads. You don't.
+##   graft  - a leashed seed goes up the vent, you walk out as its leash. It ends with you.
+##   fallow - nobody leaves. The wing sterilizes itself. The voicemail stays unplayed.
 
 const GROUND_SHADER := preload("res://shaders/ground_spread.gdshader")
 const HandView := preload("res://scripts/ui/hand_view.gd")
+const Juice := preload("res://scripts/fx/juice.gd")
+
+## What you wrote down before you left. Same truth for every way out; the cost differs.
+const TRUTH := [
+	"I took its leash off. I signed alone.",
+	"03:12. I locked the wing from inside.",
+	"I sent the six through decon.",
+	"I let the cycle run.",
+	"03:14. I burned every stock.",
+	"03:20. I cut my palm over the last dish.",
+]
+const COSTS := {
+	"purge": ["It's burned out of me now. All of it.", "Nothing left can fight the grey.",
+		"I walk north anyway."],
+	"graft": ["It's leashed again. To me.", "It won't beat the grey. Only hold it.",
+		"When I die, it dies with me."],
+	"root": ["I let it have me.", "There is no me after this.", "Anyone who eats from it carries it."],
+}
+const FALLOW_FORM := [
+	"INCIDENT 12-L      WING B",
+	"CAUSE ........... ACCESS 0001",
+	"DECON B ......... 6 IN, 0 OUT",
+	"S-7 STOCKS ...... VOID 03:14",
+	"LAST CARRIER .... 0001",
+	"VITALS .......... NONE",
+]
+const FALLOW_COST := ["S-7: EXTINCT. THE GREY: UNCHANGED.", "VOICEMAIL (1): UNPLAYED."]
 
 var _set: Node3D
 var _cam: Camera3D
@@ -25,6 +52,7 @@ func _ready() -> void:
 	if args.has("ending"):
 		_key = args["ending"]
 	UI.set_post(0.0, 0.0)
+	Sfx.drone("dream")
 	_layer = CanvasLayer.new()
 	_layer.layer = 10
 	add_child(_layer)
@@ -42,6 +70,12 @@ func _process(dt: float) -> void:
 		w["t"] += dt
 		fig.position += -fig.global_transform.basis.z * w["speed"] * dt
 		Figure.walk(fig, w["t"])
+		var wt: float = w["t"]
+		var ph := int(wt * 9.0 / PI)
+		var last_ph: int = w.get("ph", 0)
+		if ph != last_ph:
+			w["ph"] = ph
+			Sfx.play("step", randf_range(0.85, 1.0), -16.0)
 	for m in _motes:
 		if not is_instance_valid(m["node"]):
 			continue
@@ -57,21 +91,25 @@ func _play() -> void:
 			await _shot_airlock()
 			await _shot_surface_walk(false)
 			await _shot_hand(true, false)
+			await _note(TRUTH, COSTS["purge"], false)
 			await _card("I", "PURGE")
 		"root":
 			await _shot_garden_lie_down()
 			await _shot_aerial_spread()
 			await _shot_stranger()
 			await _shot_hand(false, false, 1)
+			await _note(TRUTH, COSTS["root"], false)
 			await _card("II", "ROOT")
 		"graft":
 			await _shot_capsule()
 			await _shot_airlock()
 			await _shot_surface_walk(true)
 			await _shot_hand(true, true)
+			await _note(TRUTH, COSTS["graft"], false)
 			await _card("III", "GRAFT")
 		_:
 			await _shot_fallow()
+			await _note(FALLOW_FORM, FALLOW_COST, true)
 			await _card("0", "FALLOW")
 	Game.record_ending(_key)
 	Game.ending = ""
@@ -198,12 +236,15 @@ func _shot_airlock() -> void:
 	_look(Vector3(0.8, 2.5, 4.6), Vector3(0, 0.9, -2))
 	await _reveal()
 	await _wait(0.8)
-	await UI.say(Lore.FLAVOR["airlock_clean"], "see")
+	await UI.say(["OCCUPANT 0001 . . .", "S-7 NOT DETECTED.", "RELEASE."], "see")
+	Sfx.play("power_on", 1.0, -6.0)
 	lamp_mat.set_shader_parameter("albedo", Color("70d850"))
 	light.light_color = Color("70d850")
 	await _wait(1.2)
 	var white := Retro.omni(Color("ffffff"), 10.0, 0.0, Vector3(0, 1.5, -4))
 	_set.add_child(white)
+	Sfx.play("door", 0.8, -4.0)
+	Juice.shake(_cam, 0.04, 0.6)
 	var tw := create_tween().set_parallel()
 	tw.tween_property(door, "position:y", 3.8, 2.5).set_trans(Tween.TRANS_SINE)
 	tw.tween_property(white, "light_energy", 6.0, 2.5)
@@ -274,6 +315,7 @@ func _shot_hand(clean: bool, moss_edge: bool, stage := 0) -> void:
 		_layer.add_child(moss)
 	await _reveal()
 	if moss:
+		Sfx.play("whisper", 0.8, -10.0)
 		# It reaches for the fingers, and stops.
 		var tw := create_tween().set_loops(3)
 		tw.tween_property(moss, "size:y", 9.0, 0.6)
@@ -305,6 +347,8 @@ func _shot_garden_lie_down() -> void:
 	_set.add_child(fig)
 	_look(Vector3(0, 4.0, 1.01), Vector3(0, 0.5, 1.0))
 	await _reveal()
+	Sfx.heartbeat(0.7)
+	Sfx.play("whisper", 0.7, -8.0)
 	await _wait(2.0)
 	await _cam_move(Vector3(0, 11.0, 1.02), Vector3(0, 0.5, 1.0), 5.0)
 	await UI.fade_out(1.2)
@@ -319,10 +363,13 @@ func _shot_aerial_spread() -> void:
 	_env.environment.fog_density = 0.004
 	_env.environment.ambient_light_energy = 0.7
 	_look(Vector3(0, 26, 26), Vector3(0, 0, -6))
+	Sfx.drone("root")
+	Sfx.heartbeat(0.0)
 	await _reveal()
 	# Trees pop where the green has reached.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 3
+	var bursts := 0
 	var trees: Array = []
 	for i in 70:
 		var a := rng.randf() * TAU
@@ -349,6 +396,9 @@ func _shot_aerial_spread() -> void:
 				tree.scale = Vector3(0.01, 0.01, 0.01)
 				_set.add_child(tree)
 				create_tween().tween_property(tree, "scale", Vector3.ONE, 0.6)
+				if bursts < 6:
+					bursts += 1
+					Juice.burst(_set, tree.position + Vector3(0, 1, 0), Color("70d850"), 8, 2.0)
 		_cam.position = Vector3(0, 26 + k * 18.0, 26 + k * 14.0)
 		_cam.look_at(Vector3(0, 0, -6))
 		await get_tree().process_frame
@@ -375,6 +425,7 @@ func _shot_stranger() -> void:
 	await _wait(1.5)
 	var tw := create_tween()
 	tw.tween_property(fig.get_node("ArmL"), "rotation:x", -1.4, 1.2)
+	Sfx.play("whisper", 1.1, -10.0)
 	await _cam_move(Vector3(0.9, 1.4, -0.6), fig.position + Vector3(-0.3, 1.0, 0), 3.0)
 	await _wait(1.0)
 	await _cut()
@@ -401,9 +452,11 @@ func _shot_capsule() -> void:
 	await _reveal()
 	await _wait(0.8)
 	var grow := create_tween()
+	Sfx.play("vial", 0.8, -6.0)
 	grow.tween_property(capsule, "scale", Vector3.ONE, 1.0)
 	await grow.finished
 	await _wait(0.6)
+	Sfx.play("power_on", 0.7, -6.0)
 	var up := create_tween().set_parallel()
 	up.tween_property(capsule, "position:y", 14.0, 5.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	await _cam_move(Vector3(1.2, 6.0, 1.6), Vector3(0, 12.0, 0), 4.5)
@@ -432,13 +485,16 @@ func _shot_fallow() -> void:
 	stamp.position = Vector2(8, 8)
 	_layer.add_child(stamp)
 	await _reveal()
+	Sfx.play("glitch", 0.8, -8.0)
 	await _wait(1.5)
-	await UI.say(["OCCUPANT VITALS: NONE.", "WING B: STERILIZATION CYCLE ENGAGED."], "see")
+	await UI.say(["WING B: STERILIZATION CYCLE ENGAGED."], "see")
 	var tw := create_tween().set_parallel()
 	tw.tween_property(fire, "light_energy", 8.0, 4.0)
 	tw.tween_property(_env.environment, "background_color", Color("ff9040"), 4.0)
 	await tw.finished
 	UI.flash(Color.WHITE, 1.0)
+	Sfx.play("thud", 0.5, 0.0)
+	Juice.shake(_cam, 0.2, 0.8)
 	await _wait(0.5)
 	stamp.queue_free()
 	UI.set_post(0.0, 0.0)
@@ -471,6 +527,8 @@ func _card(num: String, word: String) -> void:
 	d.position = Vector2((UI.W - d.text.length() * 8) / 2.0, 186)
 	_layer.add_child(d)
 	await _reveal()
+	Sfx.play("thud", 0.6, -4.0)
+	Juice.punch(b, 0.15)
 	var t := 0.0
 	while t < 7.0 and not _skip:
 		await get_tree().process_frame
@@ -478,3 +536,73 @@ func _card(num: String, word: String) -> void:
 		if t > 1.5 and (Input.is_action_just_pressed("interact") or Input.is_action_just_pressed("back")):
 			break
 	await _cut()
+
+
+# ------------------------------------------------------------------ the note
+
+## A page on the dark: what happened, then what it cost. Typed, then held.
+## form=true: an incident form, not your hand.
+func _note(head: Array, cost: Array, form: bool) -> void:
+	if _set:
+		_set.queue_free()
+		_set = null
+	_walkers.clear()
+	_motes.clear()
+	var bg := ColorRect.new()
+	bg.color = Color("06090c")
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_layer.add_child(bg)
+	var paper := ColorRect.new()
+	paper.color = Color("b8bcb4") if form else Color("cfc9b2")
+	paper.position = Vector2(20, 22)
+	paper.size = Vector2(UI.W - 40, UI.H - 44)
+	bg.add_child(paper)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(_key)
+	var labels: Array[Label] = []
+	var y := 32.0
+	var lines: Array = head + cost
+	for i in lines.size():
+		if i == head.size():
+			y += 6.0
+		var s: String = lines[i]
+		var ink := Color("7a2020") if i >= head.size() else Color("2a3048")
+		var l := UI.label(s, ink)
+		l.position = Vector2(32, y)
+		if not form:
+			l.position.x += rng.randf_range(-2.0, 3.0)
+			l.rotation = rng.randf_range(-0.012, 0.012)
+		l.visible_characters = 0
+		bg.add_child(l)
+		labels.append(l)
+		y += 13.0
+	await _reveal()
+	Sfx.play("page", 1.0, -6.0)
+	var fast := false
+	for l in labels:
+		var n := l.text.length()
+		var shown := 0
+		var acc := 0.0
+		while shown < n:
+			await get_tree().process_frame
+			if Input.is_action_just_pressed("interact"):
+				fast = true
+			if fast:
+				shown = n
+			else:
+				acc += get_process_delta_time() * 26.0
+				var nc := mini(int(acc), n)
+				if nc > shown and nc % 2 == 0 and l.text[nc - 1] != " ":
+					Sfx.play("type", randf_range(0.85, 1.05), -12.0)
+				shown = nc
+			l.visible_characters = shown
+		if not fast:
+			await _wait(0.35)
+	var t := 0.0
+	while t < 6.0:
+		await get_tree().process_frame
+		t += get_process_delta_time()
+		if t > 0.4 and (Input.is_action_just_pressed("interact") or Input.is_action_just_pressed("back")):
+			break
+	await _cut()
+	bg.queue_free()

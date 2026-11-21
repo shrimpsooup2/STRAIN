@@ -4,6 +4,8 @@ extends CanvasLayer
 ##   "pick"   choose a gene → its index; back → -1
 ##   "place"  slide `moving` into a slot → insertion index (0..size); back → -1 if cancel allowed
 ## Usage: var i: int = await StrandView.new().run(self, strand, "pick", {"title": "..."})
+## Upgraded genes ("lyse+") draw brighter. In "place" mode the desc names both neighbours
+## (the strand is a loop, so the ends wrap) and the moving gene's LINK text.
 
 signal done(result: int)
 
@@ -19,6 +21,7 @@ var moving := ""
 var title := ""
 var allow_cancel := true
 var cursor := 0
+var highlight := -1
 var _top := 0
 var _canvas: Control
 var _desc: Label
@@ -26,13 +29,14 @@ var _blink := 0.0
 var _closed := false
 
 
-## opts: title, moving (place), cancel (bool), cursor (int)
+## opts: title, moving (place), cancel (bool), cursor (int), highlight (int row to mark)
 func run(parent: Node, p_strand: Array, p_mode: String, opts: Dictionary = {}) -> int:
 	strand = p_strand.duplicate()
 	mode = p_mode
 	moving = String(opts.get("moving", ""))
 	title = String(opts.get("title", "STRAND"))
 	allow_cancel = bool(opts.get("cancel", true))
+	highlight = int(opts.get("highlight", -1))
 	var start: int = opts.get("cursor", strand.size() if mode == "place" else 0)
 	cursor = clampi(start, 0, maxi(0, _count() - 1))
 	layer = 50
@@ -41,6 +45,15 @@ func run(parent: Node, p_strand: Array, p_mode: String, opts: Dictionary = {}) -
 	var r: int = await done
 	queue_free()
 	return r
+
+
+## Display name, with a trailing "+" for upgraded ids.
+static func gene_name(id: String) -> String:
+	var c: Dictionary = Cards.card(id)
+	var nm := String(c.get("name", id))
+	if id.ends_with("+") and not nm.ends_with("+"):
+		nm += "+"
+	return nm
 
 
 func _count() -> int:
@@ -96,10 +109,19 @@ func _refresh() -> void:
 	else:
 		var id := _item(cursor)
 		var c: Dictionary = Cards.card(id)
-		var head := "%s  COST %d. " % [c["name"], int(c["cost"])]
-		if c["kind"] == "passive":
-			head = "%s. " % c["name"]
-		_desc.text = head + String(c["desc"])
+		var head := "%s  COST %d. " % [gene_name(id), int(c.get("cost", 0))]
+		if c.get("kind", "") == "passive":
+			head = "%s. " % gene_name(id)
+		var txt := head + String(c.get("desc", ""))
+		if mode == "place":
+			var n := _count()
+			if n <= 1:
+				txt += "\nALONE IN THE STRAND."
+			else:
+				var prev := _item(posmod(cursor - 1, n))
+				var next := _item(posmod(cursor + 1, n))
+				txt += "\nSITS BETWEEN %s AND %s." % [gene_name(prev), gene_name(next)]
+		_desc.text = txt
 	_canvas.queue_redraw()
 
 
@@ -119,41 +141,51 @@ func _draw_list() -> void:
 	if n == 0:
 		GeneArt.text(ci, LIST.position + Vector2(10, 22), "(EMPTY)", UI.C_DIM)
 		return
-	for row in mini(ROWS, n - _top):
-		var i := _top + row
+	for r in mini(ROWS, n - _top):
+		var i := _top + r
 		var id := _item(i)
 		var c: Dictionary = Cards.card(id)
-		var y := LIST.position.y + 20 + row * ROW_H
+		var y := LIST.position.y + 20 + r * ROW_H
 		var x := LIST.position.x + 8
 		var is_cur := i == cursor
 		var is_moving := mode == "place" and is_cur
+		var upgraded := id.ends_with("+")
 		if is_cur:
 			var hl := UI.C_FOCUS
 			if is_moving:
 				hl = UI.C_WARN.lightened(0.5) if fmod(_blink, 0.6) < 0.4 else UI.C_FOCUS
 			ci.draw_rect(Rect2(x - 2, y - 1, LIST.size.x - 12, ROW_H), hl)
 			ci.draw_rect(Rect2(x - 2, y - 1, 3, ROW_H), UI.C_ACCENT)
+		elif i == highlight:
+			ci.draw_rect(Rect2(x - 2, y - 1, LIST.size.x - 12, ROW_H), UI.C_WARN.lightened(0.6))
 		var ink := UI.C_INK
 		if Cards.is_green(id):
 			ink = UI.C_GREEN.darkened(0.45)
 		elif Cards.is_junk(id):
 			ink = GeneArt.C_JUNK.darkened(0.2)
+		elif upgraded:
+			ink = UI.C_ACCENT.darkened(0.45)
 		GeneArt.text(ci, Vector2(x + 4, y), ("+" if is_moving else "%02d" % (i + 1)), UI.C_BORDER)
-		ci.draw_rect(Rect2(x + 24, y + 1, 6, 6), GeneArt.gene_color(id))
-		ci.draw_rect(Rect2(x + 24, y + 1, 6, 1), GeneArt.gene_color(id).lightened(0.4))
-		GeneArt.text(ci, Vector2(x + 34, y), String(c["name"]), ink)
-		var cost := "P" if c["kind"] == "passive" else str(int(c["cost"]))
+		var gc := GeneArt.gene_color(id)
+		ci.draw_rect(Rect2(x + 24, y + 1, 6, 6), gc)
+		ci.draw_rect(Rect2(x + 24, y + 1, 6, 1), gc.lightened(0.4))
+		if upgraded:
+			ci.draw_rect(Rect2(x + 23, y, 8, 8), UI.C_ACCENT, false)
+		GeneArt.text(ci, Vector2(x + 34, y), gene_name(id), ink)
+		var cost := "P" if c.get("kind", "") == "passive" else str(int(c.get("cost", 0)))
 		GeneArt.text(ci, Vector2(x + 120, y), cost, UI.C_BORDER)
-		GeneArt.text(ci, Vector2(x + 136, y), String(c["short"]), ink)
+		GeneArt.text(ci, Vector2(x + 136, y), String(c.get("short", "")), ink)
 		var tag := ""
 		if c.has("pact"):
 			tag = "PACT %d" % int(c["pact"])
 		elif Cards.is_green(id):
 			tag = "GREEN"
-		elif c["kind"] == "junk":
+		elif c.get("kind", "") == "junk":
 			tag = "JUNK"
-		elif c["kind"] == "passive":
+		elif c.get("kind", "") == "passive":
 			tag = "PASSIVE"
+		elif upgraded:
+			tag = "ENRICHED"
 		if tag != "":
 			GeneArt.text(ci, Vector2(x + 228, y), tag, UI.C_GREEN.darkened(0.3) if tag == "GREEN" else UI.C_DIM)
 	# Scroll arrows.
@@ -166,10 +198,10 @@ func _draw_list() -> void:
 func _row_at(p: Vector2) -> int:
 	if not LIST.has_point(p):
 		return -1
-	var row := int((p.y - (LIST.position.y + 19)) / ROW_H)
-	if row < 0 or row >= ROWS:
+	var r := int((p.y - (LIST.position.y + 19)) / ROW_H)
+	if r < 0 or r >= ROWS:
 		return -1
-	var i := _top + row
+	var i := _top + r
 	return i if i < _count() else -1
 
 

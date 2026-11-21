@@ -25,8 +25,58 @@ const BREAKER_NAMES := {
 	"medbay": "MEDBAY", "freezer": "FREEZER", "cctv": "CCTV", "comms": "COMMS",
 	"archive": "ARCHIVE", "incubator": "INCUBATOR", "garden": "GARDEN",
 }
-const LORE_OBJECTS := ["vial", "whiteboard", "binder", "coats", "mugs", "doorlog",
-	"freezer", "pots", "photo", "drawing", "plaque"]
+const LORE_OBJECTS := ["vial", "whiteboard", "mugs", "doorlog", "freezer", "pots",
+	"photo", "drawing", "plaque", "chair", "n_chair", "n_soil", "n_tally", "n_pot", "n_headset"]
+## Sheets in rooms that need their own breaker before you can read them.
+const SHEET_POWER := {"invert": "freezer", "lance": "cctv", "mirror": "incubator"}
+const CABINET_CODE := "0611"
+## Waking up somewhere you didn't lie down. One line, first time that day.
+const WAKE_LINES := {
+	3: "Grit in the blanket.",
+	5: "My knees are grey.",
+	8: "My voice is gone.",
+	11: "Soil under my nails.",
+	15: "The blanket is outside.",
+}
+## What each room is for, shown in the bottom strip while you stand in it.
+const ROOM_PURPOSE := {
+	"lab": "Bench: grow a culture, inject.",
+	"corridor": "Signed doors. Breakers inside.",
+	"medbay": "Scan the hand. Treat the spread.",
+	"break": "Cot: sleep to end the day.",
+	"freezer": "Deep store. Cold samples.",
+	"security": "Camera files. Garden breaker.",
+	"comms": "Messages. Station records.",
+	"garden": "Trial beds. Keep out.",
+	"generator": "Powers the whole wing.",
+	"airlock": "The way out. Needs a clean scan.",
+	"hatch": "One supply drop a day.",
+	"incubator": "Culture lines on file.",
+}
+## What Z does to the thing you face. Lore objects fall back to LOOK + their title.
+const OBJ_VERB := {
+	"bench": "CULTURE BENCH: grow, inject",
+	"scanner": "SCANNER: scan, treat",
+	"cabinet": "CABINET: keypad",
+	"cot": "COT: sleep, end the day",
+	"generator": "GENERATOR: power the wing",
+	"hatch": "SUPPLY HATCH: today's drop",
+	"incubator": "INCUBATOR: culture lines",
+	"cctv": "CCTV: camera files",
+	"comms": "COMMS: messages",
+	"testbed": "TEST BED",
+	"airlock": "AIRLOCK: scan out",
+	"decon": "DECON TRAY",
+	"fridge": "FRIDGE: search",
+	"toolbox": "TOOLBOX: search",
+	"locker": "LOCKER: search",
+	"coldbox": "COLD BOX: search",
+	"deep": "DEEP FREEZE: search",
+	"desk2": "DESK 2: drawer",
+	"coats": "COAT HOOKS: search",
+	"badge": "BADGE: pick up",
+	"n_dish": "DISH: take",
+}
 
 var cam_dist := CAM_DIST
 
@@ -45,12 +95,19 @@ var _hud_day: Label
 var _hud_reagent: Label
 var _hud_pips: HBoxContainer
 var _hud_sig := ""
+var _hud_note: Label
+var _strip: PanelContainer
+var _strip_name: Label
+var _strip_room: Label
+var _strip_hint: Label
+var _strip_sig := ""
 
 
 func _ready() -> void:
 	if Game.unlocked.is_empty():
 		Game.new_game()
 	UI.apply_stage_post()
+	Sfx.drone("lab")
 	add_child(Retro.environment(Color("05070a"), Color(0.4, 0.46, 0.58), 0.32, Color("080c10"), 0.03))
 	add_child(Retro.sun(Vector3(-60, 20, 0), Color(0.75, 0.82, 0.95), 0.12))
 	_map = LabMap.new()
@@ -86,6 +143,13 @@ func _day_start() -> void:
 		_snap_camera()
 		_room = _map.room_at(_player.tile)
 		return
+	# Back from the culture bench: stand where you left, no wake-up.
+	if Game.flags.has("from_culture"):
+		Game.flags.erase("from_culture")
+		_player.place(Vector2i(2, 13), Vector2i(0, -1))
+		_snap_camera()
+		_room = _map.room_at(_player.tile)
+		return
 	_acting = true
 	var intro := Game.day == 1 and not Game.flags.has("intro")
 	if intro:
@@ -109,6 +173,12 @@ func _day_start() -> void:
 		if Game.stage > seen:
 			await _stage_beat()
 		Game.flags["seen_stage"] = Game.stage
+		var woke := int(Game.flags.get("woke", 0))
+		if WAKE_LINES.has(Game.day) and woke < Game.day:
+			var wl: String = WAKE_LINES[Game.day]
+			await UI.say([wl], "think")
+			Game.add_thought(wl)
+		Game.flags["woke"] = Game.day
 	Game.save_game()
 	_room = _map.room_at(_player.tile)
 	UI.toast(_map.room_name(_room))
@@ -151,6 +221,7 @@ func _process(dt: float) -> void:
 	_cam_target = _cam_target.lerp(_player.position + Vector3(0, 0.5, 0), 1.0 - exp(-7.0 * dt))
 	_cam.position = _cam_target + _cam_offset()
 	_update_hud()
+	_update_strip()
 	if _busy():
 		_idle = 0.0
 		return
@@ -209,6 +280,7 @@ func _on_stepped(t: Vector2i) -> void:
 	var r: String = _map.room_at(t)
 	if r != _room and r != "":
 		_room = r
+		Sfx.play("door", 1.0, -8.0)
 		UI.toast(_map.room_name(r))
 
 
@@ -236,17 +308,76 @@ func _build_hud() -> void:
 	hb.add_child(_hud_pips)
 	_hud_reagent = UI.label("", UI.C_GREEN)
 	vb.add_child(_hud_reagent)
+	vb.add_child(UI.label("NOTE TO SELF", UI.C_DIM))
+	_hud_note = UI.label("", UI.C_THINK_FG)
+	vb.add_child(_hud_note)
+	# Bottom strip: where you are, what the room is for, what Z does here.
+	_strip = UI.panel(Rect2(4, 186, 376, 0), true)
+	_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(_strip)
+	var sv := VBoxContainer.new()
+	sv.add_theme_constant_override("separation", 2)
+	_strip.add_child(sv)
+	var rb := HBoxContainer.new()
+	rb.add_theme_constant_override("separation", 8)
+	sv.add_child(rb)
+	_strip_name = UI.label("", UI.C_ACCENT)
+	rb.add_child(_strip_name)
+	_strip_room = UI.label("", UI.C_DIM)
+	rb.add_child(_strip_room)
+	_strip_hint = UI.label("", UI.C_PAPER)
+	sv.add_child(_strip_hint)
 	_update_hud()
+
+
+func _update_strip() -> void:
+	_strip.visible = not _busy() and _room != ""
+	if not _strip.visible:
+		return
+	var id: String = _map.objs.get(_player.target_tile(), "")
+	var lit := _map.room_lit(_room)
+	var sig := "%s|%s|%s|%s" % [_room, id, lit, Game.is_powered(id.substr(8)) if id.begins_with("breaker:") else false]
+	if sig == _strip_sig:
+		return
+	_strip_sig = sig
+	var purpose: String = ROOM_PURPOSE.get(_room, "")
+	if not Game.is_powered("generator"):
+		purpose = "NO POWER. Start the GENERATOR."
+	elif not lit:
+		purpose = "DARK. Breaker is in SECURITY." if _room == "garden" else "DARK. Breaker on the back wall."
+	_strip_name.text = _map.room_name(_room)
+	_strip_room.text = purpose
+	_strip_room.add_theme_color_override("font_color", UI.C_DIM if lit else UI.C_WARN)
+	_strip_hint.text = ("Z  " + _verb(id)) if id != "" else "TAB  menu"
+	_strip_hint.add_theme_color_override("font_color", UI.C_PAPER if id != "" else UI.C_DIM)
+
+
+func _verb(id: String) -> String:
+	if id.begins_with("breaker:"):
+		var room := id.substr(8)
+		var label: String = BREAKER_NAMES.get(room, room.to_upper())
+		if Game.is_powered(room):
+			return "BREAKER: %s is on" % label
+		return "BREAKER: power %s (%dR 1B)" % [label, int(Game.ROOM_POWER_COST.get(room, 3))]
+	if id.begins_with("sheet:"):
+		return "GENE SHEET: take"
+	if OBJ_VERB.has(id):
+		return OBJ_VERB[id]
+	var e: Dictionary = Lore.entry(id)
+	return "LOOK: " + str(e.get("title", id.to_upper()))
 
 
 func _update_hud() -> void:
 	var bmax := Game.breath_max()
-	var sig := "%d|%d|%d|%d" % [Game.day, Game.breath, bmax, Game.reagent]
+	var note := Lore.objective()
+	var sig := "%d|%d|%d|%d|%s" % [Game.day, Game.breath, bmax, Game.reagent, note]
 	if sig == _hud_sig:
 		return
 	_hud_sig = sig
 	_hud_day.text = "DAY %02d" % Game.day
 	_hud_reagent.text = "REAGENT %d" % Game.reagent
+	# Your own handwriting: it smudges as the infection reaches memory.
+	_hud_note.text = "- " + Lore.legible(note)
 	for c in _hud_pips.get_children():
 		c.queue_free()
 	for i in maxi(bmax, Game.breath):
@@ -284,23 +415,90 @@ func _use(id: String) -> void:
 	if id.begins_with("breaker:"):
 		await _breaker(id.substr(8))
 		return
+	if id.begins_with("sheet:"):
+		await _sheet(id.substr(6))
+		return
 	match id:
 		"badge":
 			await Lore.show("badge")
 			_map.remove_badge()
 		"bench":
-			if await _menus.bench():
-				_leaving = true
+			_leaving = true
+			Sfx.play("door", 1.3, -6.0)
+			Game.goto("culture")
+		"binder":
+			await Lore.show("binder")
+			if Lore.available("protocol"):
+				await Lore.show("protocol")
+		"coats":
+			await Lore.show("coats")
+			if not Lore.got("key"):
+				await Lore.flavor("coat_key")
+				Lore.take("key")
+				Sfx.play("pickup")
+				Game.save_game()
+		"desk2":
+			await _desk2()
+		"cabinet":
+			await _cabinet()
+		"fridge":
+			if Lore.got("steady_hand"):
+				await Lore.flavor("fridge_empty")
+			else:
+				await Lore.flavor("fridge")
+				await _specimen("steady_hand")
+		"toolbox":
+			if Lore.got("toolbox"):
+				await Lore.flavor("toolbox_empty")
+			else:
+				await Lore.flavor("toolbox")
+				Lore.take("toolbox")
+				_gain_reagent(3)
+		"locker":
+			if await _needs_power("cctv"):
+				if Lore.got("loose_splice"):
+					await UI.say(["Steel shelves. A ring in the dust where a jar stood."])
+				else:
+					await Lore.flavor("jar")
+					await _specimen("loose_splice")
+					_map.remove_find("jar:loose_splice")
+		"coldbox":
+			if await _needs_power("archive"):
+				if Lore.got("long_read"):
+					await UI.say(["The cold box hums. Empty."])
+				else:
+					await UI.say(["ARCHIVE COLD BOX. 4C.", "One jar in the rack, frosted. A slip: KEEP. FOR READING."])
+					await _specimen("long_read")
+		"deep":
+			if await _needs_power("freezer"):
+				if Lore.got("lytic"):
+					await Lore.flavor("deep_empty")
+				else:
+					await Lore.show("lytic")
+					if not Game.strains.has("lytic"):
+						Game.strains.append("lytic")
+					Lore.take("lytic")
+					Sfx.play("pickup")
+					UI.toast("NEW STRAIN: LYTIC")
+					Game.save_game()
+		"decon":
+			if Lore.available("decon"):
+				await Lore.show("decon")
+				await Lore.show("badge")
+				_map.remove_badge()
+			else:
+				await Lore.flavor("decon_shut")
+		"n_dish":
+			await Lore.show("n_dish")
+			if not Lore.got("chain_enzyme"):
+				await _specimen("chain_enzyme")
+			_map.remove_find("n_dish")
 		"cctv":
 			if await _needs_power("cctv"):
-				await _monitor("cctv")
-				await Lore.show("cctv")
+				await _cctv()
 		"comms":
 			if await _needs_power("comms"):
-				await _monitor("comms")
-				await Lore.show("comms")
-				if Game.lore.has("photo"):
-					await Lore.show("coords")
+				await _comms()
 		"tillwell":
 			if await _needs_power("archive"):
 				await Lore.show("tillwell")
@@ -323,10 +521,143 @@ func _use(id: String) -> void:
 			await _testbed()
 		"incubator":
 			if await _needs_power("incubator"):
-				var names: Array = []
-				for s in Game.strains:
-					names.append(Cards.STRAINS[s]["name"])
-				await UI.say(["INCUBATOR. CULTURE LINES ON FILE:", ", ".join(names) + "."])
+				await _incubator()
+
+
+func _gain_reagent(n: int) -> void:
+	Game.reagent += n
+	Sfx.play("pickup")
+	UI.toast("REAGENT +%d" % n)
+	Game.save_game()
+
+
+## A sample jar: the adaptation joins the culture's grown list for the bench.
+func _specimen(aid: String) -> void:
+	var grown: Array = Game.culture.get("grown", [])
+	if not grown.has(aid):
+		grown.append(aid)
+	Game.culture["grown"] = grown
+	var specs: Array = Game.flags.get("specimens", [])
+	if not specs.has(aid):
+		specs.append(aid)
+	Game.flags["specimens"] = specs
+	Lore.take(aid)
+	Sfx.play("pickup")
+	var info := Adapt.info(aid)
+	await UI.say(["SPECIMEN: %s" % str(info.get("name", aid)), str(info.get("desc", "")),
+		"Grow it into the culture at the bench."])
+	Game.save_game()
+
+
+func _sheet(gene: String) -> void:
+	var room: String = SHEET_POWER.get(gene, "")
+	if room != "" and not await _needs_power(room):
+		return
+	await Lore.flavor("sheet")
+	if not Game.unlocked.has(gene):
+		Game.unlocked.append(gene)
+	Lore.take("sheet:" + gene)
+	_map.remove_find("sheet:" + gene)
+	Sfx.play("page")
+	var c: Dictionary = Cards.card(gene)
+	await UI.say(["NEW GENE: %s" % str(c.get("name", gene.to_upper())), str(c.get("desc", "")),
+		"It can turn up in your runs now."])
+	Game.save_game()
+
+
+func _desk2() -> void:
+	if Lore.got("drawer"):
+		await UI.say(["DESK 2. The drawer hangs open. Empty."])
+		return
+	if not Lore.got("key"):
+		await Lore.flavor("drawer_locked")
+		return
+	Sfx.play("door", 1.6, -6.0)
+	await Lore.flavor("drawer_open")
+	Lore.take("drawer")
+	_gain_reagent(2)
+	await _specimen("pellicle")
+
+
+func _cabinet() -> void:
+	if not await _needs_power("medbay"):
+		return
+	if Lore.got("cabinet"):
+		await Lore.flavor("cabinet_empty")
+		return
+	await Lore.flavor("keypad")
+	var code := ""
+	for i in 4:
+		var digits: Array = []
+		for d in 10:
+			digits.append(str(d))
+		var pick := await UI.choose(digits, "CODE: %s" % (code + "_".repeat(4 - code.length())))
+		if pick < 0:
+			return
+		code += str(pick)
+		Sfx.play("blip", 1.0 + i * 0.1)
+	if code != CABINET_CODE:
+		Sfx.play("error")
+		await Lore.flavor("keypad_wrong")
+		return
+	Sfx.play("confirm")
+	await Lore.flavor("keypad_open")
+	Lore.take("cabinet")
+	_gain_reagent(2)
+	await _specimen("quorum_sense")
+
+
+func _cctv() -> void:
+	var files: Array = []
+	if Lore.available("cctv"):
+		files.append("cctv")
+	if Lore.available("cctv_palm"):
+		files.append("cctv_palm")
+	if files.is_empty():
+		await Lore.flavor("cctv_live")
+		return
+	var rows: Array = []
+	for f in files:
+		rows.append(("FILE 03:12" if f == "cctv" else "FILE 03:20") + ("" if Lore.has(f) else "  NEW"))
+	rows.append("LEAVE")
+	var i := await UI.choose(rows, "CCTV ARCHIVE.")
+	if i < 0 or i >= files.size():
+		return
+	var f: String = files[i]
+	await _monitor(f)
+	await Lore.show(f)
+
+
+func _comms() -> void:
+	if not Lore.comms_open():
+		await Lore.flavor("comms_dead")
+		return
+	await _monitor("comms")
+	await Lore.show("comms")
+	if Lore.has("photo"):
+		await Lore.show("coords")
+	var vm := Lore.next_vm()
+	if vm == "":
+		return
+	await UI.say(["The message light is blinking."])
+	await _monitor("voicemail", Lore.voicemail_level(vm), str(Lore.entry(vm).get("title", "")))
+	await Lore.show(vm)
+
+
+func _incubator() -> void:
+	if not Lore.got("tray"):
+		await Lore.flavor("tray")
+		Lore.take("tray")
+		Game.culture["trait_slots"] = maxi(int(Game.culture.get("trait_slots", 1)), 2)
+		Sfx.play("pickup")
+		UI.toast("CULTURE: 2 TRAIT SLOTS")
+		Game.save_game()
+		return
+	var names: Array = []
+	for s in Game.strains:
+		var sd: Dictionary = Cards.STRAINS.get(s, {})
+		names.append(str(sd.get("name", str(s).to_upper())))
+	await UI.say(["INCUBATOR. CULTURE LINES ON FILE:", ", ".join(names) + "."])
 
 
 func _needs_power(room: String) -> bool:
@@ -344,9 +675,11 @@ func _tired() -> bool:
 	return true
 
 
-func _monitor(kind: String) -> void:
+func _monitor(kind: String, level := 0, label := "") -> void:
 	var mon: CanvasLayer = Monitor.new()
 	mon.set("kind", kind)
+	mon.set("level", level)
+	mon.set("label", label)
 	add_child(mon)
 	await mon.finished
 
@@ -363,6 +696,7 @@ func _generator() -> void:
 	Game.spend_breath(1)
 	Game.power_room("generator")
 	_map.apply_power()
+	Sfx.play("power_on")
 	UI.flash(Color(0.9, 0.95, 1.0))
 	UI.toast("MAINS: ON")
 	Game.save_game()
@@ -387,6 +721,7 @@ func _breaker(room: String) -> void:
 	Game.spend_breath(1)
 	if Game.power_room(room):
 		_map.apply_power()
+		Sfx.play("power_on")
 		UI.toast("%s: POWER ON" % label)
 		Game.save_game()
 
@@ -442,6 +777,9 @@ func _testbed() -> void:
 	if not (Game.is_powered("garden") or Game.stage >= 5):
 		await Lore.flavor("dark_room")
 		return
+	await Lore.flavor("testbed_hollow")
+	if Game.root_unlocked() and not Lore.has("truth"):
+		await Lore.show("truth")
 	if not await UI.confirm("THE TEST BED. THE SOIL IS WARM.\nSTAY HERE?"):
 		return
 	if not await UI.confirm("LIE DOWN?"):
