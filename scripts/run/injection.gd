@@ -46,8 +46,8 @@ const SITES := {
 			"desc": "Between the ribs. No change.", "opts": {}},
 		{"id": "collarbone", "name": "UNDER THE COLLARBONE", "view": "neck", "at": Vector2(52, 164),
 			"spot": Vector3(-0.13, 1.5, 0.145),
-			"desc": "Fights start 2 Chorus louder. +1 UPTAKE.",
-			"opts": {"pitch": 2, "uptake": 1}},
+			"desc": "PRIMER +1: fights open on a HELD chain. +1 UPTAKE.",
+			"opts": {"primer": 1, "uptake": 1}},
 		{"id": "throat", "name": "THE THROAT", "view": "neck", "at": Vector2(98, 116),
 			"spot": Vector3(0.0, 1.62, 0.065),
 			"desc": "Start with 1 extra gene: HYMN.",
@@ -82,7 +82,7 @@ const DOSES := [
 		"opts": {"max_colony": 38, "fray": 1, "uptake": 1}},
 ]
 
-const INT_KEYS := ["fray", "uptake", "pitch", "adapt_rare"]
+const INT_KEYS := ["fray", "uptake", "primer", "adapt_rare"]
 const ARRAY_KEYS := ["boosters", "adapt", "genes"]
 
 

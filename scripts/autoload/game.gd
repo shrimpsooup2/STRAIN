@@ -76,8 +76,8 @@ var materials: Dictionary = {"clot": 0, "plasma": 0, "alveoli": 0, "myelin": 0} 
 ##   grown: adaptation ids available to equip (crafted or found as specimens)
 ##   traits: equipped adaptation ids (≤ trait_slots), active from the start of every run
 ##   boosters: prepared booster ids (≤ 2), carried into the next run and consumed
-##   pitch: starting Chorus offset per fight (0..6)
-var culture: Dictionary = {"grown": [], "traits": [], "trait_slots": 1, "boosters": [], "pitch": 0}
+##   primer: HELD chain the first gene of each fight opens on (0..3, costs Colony)
+var culture: Dictionary = {"grown": [], "traits": [], "trait_slots": 1, "boosters": [], "primer": 0}
 var run: Dictionary = {}             ## current run; empty when in the lab
 
 var _scene_busy := false
@@ -167,7 +167,7 @@ func new_game() -> void:
 	supply_taken_day = 0
 	ending = ""
 	materials = {"clot": 0, "plasma": 0, "alveoli": 0, "myelin": 0}
-	culture = {"grown": [], "traits": [], "trait_slots": 1, "boosters": [], "pitch": 0}
+	culture = {"grown": [], "traits": [], "trait_slots": 1, "boosters": [], "primer": 0}
 	flags = {}
 	run = {}
 	breath = breath_max()
@@ -211,7 +211,50 @@ func load_game() -> bool:
 			set(k, v)
 	for r in regions.keys():
 		regions[r] = int(regions[r])
+	_migrate()
 	return true
+
+
+## Drop ids from retired content (the old Chorus genes/adaptations) and rename CANTOR.
+func _migrate() -> void:
+	for arr in [unlocked, gene_bank, start_order, last_failed_strand]:
+		var a: Array = arr
+		for i in range(a.size() - 1, -1, -1):
+			if not Cards.CARDS.has(Cards.base_id(String(a[i]))):
+				a.remove_at(i)
+	for k in ["grown", "traits"]:
+		var a: Array = culture.get(k, [])
+		for i in range(a.size() - 1, -1, -1):
+			if not Adapt.DATA.has(String(a[i])):
+				a.remove_at(i)
+	culture.erase("pitch")
+	if not culture.has("primer"):
+		culture["primer"] = 0
+	var known_b: Dictionary = preload("res://scripts/culture/boosters.gd").BOOSTERS
+	for holder in [culture, run]:
+		var bs: Array = (holder as Dictionary).get("boosters", [])
+		for i in range(bs.size() - 1, -1, -1):
+			if not known_b.has(String(bs[i])):
+				bs.remove_at(i)
+	if not run.is_empty():
+		run.erase("pitch")
+		var rs: Array = run.get("strand", [])
+		for i in range(rs.size() - 1, -1, -1):
+			if not Cards.CARDS.has(Cards.base_id(String(rs[i]))):
+				rs.remove_at(i)
+		var ra: Array = run.get("adapt", [])
+		for i in range(ra.size() - 1, -1, -1):
+			if not Adapt.DATA.has(String(ra[i])):
+				ra.remove_at(i)
+	var sp: Array = flags.get("specimens", [])
+	for i in range(sp.size() - 1, -1, -1):
+		if not Adapt.DATA.has(String(sp[i])):
+			sp.remove_at(i)
+	var si := strains.find("cantor")
+	if si >= 0:
+		strains[si] = "weaver"
+	if strain == "cantor":
+		strain = "weaver"
 
 
 func wipe_save() -> void:
@@ -345,9 +388,9 @@ func starting_strand() -> Array:
 	return base.duplicate() + gene_bank.duplicate()
 
 
-## opts (Injection screen, §13): max_colony, colony, fray, uptake, start_row, pitch,
+## opts (Injection screen, §13): max_colony, colony, fray, uptake, start_row, primer,
 ## boosters[], adapt[], adapt_rare (int), genes[], unfade (bool), site (String).
-## Culture traits/boosters/pitch are folded in here; prepared boosters are consumed.
+## Culture traits/boosters/primer are folded in here; prepared boosters are consumed.
 func start_run(region: String, opts: Dictionary = {}) -> void:
 	var is_root := region == "root"
 	var mx: int = maxi(1, int(opts.get("max_colony", START_COLONY)))
@@ -383,7 +426,7 @@ func start_run(region: String, opts: Dictionary = {}) -> void:
 		"result": "",
 		"adapt": [],
 		"boosters": boosters,
-		"pitch": int(culture.get("pitch", 0)) + int(opts.get("pitch", 0)),
+		"primer": int(culture.get("primer", 0)) + int(opts.get("primer", 0)),
 		"tissue": {},
 		"unfade": bool(opts.get("unfade", false)),
 		"site": String(opts.get("site", "")),
@@ -698,8 +741,8 @@ func _region_reward(region: String, first: bool) -> void:
 		"hollow":
 			if first:
 				hollow_bonus = 1
-				if not strains.has("cantor"):
-					strains.append("cantor")
+				if not strains.has("weaver"):
+					strains.append("weaver")
 			extra_breath += 1
 		"archive":
 			if memories < 4:
@@ -769,8 +812,8 @@ func debug_setup(kind: String) -> void:
 			_debug_midgame()
 			reagent = 20
 			materials = {"clot": 5, "plasma": 5, "alveoli": 5, "myelin": 5}
-			strains = ["scrubber", "courier", "lytic", "cantor"]
-			culture["grown"] = ["pellicle", "quorum_sense", "scar_tissue", "tuning_fork"]
+			strains = ["scrubber", "courier", "lytic", "weaver"]
+			culture["grown"] = ["pellicle", "quorum_sense", "scar_tissue", "whiplash"]
 			culture["traits"] = ["pellicle"]
 			culture["boosters"] = ["saline", "clotter"]
 			flags["specimens"] = ["pellicle", "quorum_sense"]

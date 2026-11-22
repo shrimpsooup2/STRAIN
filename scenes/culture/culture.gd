@@ -6,7 +6,7 @@ extends Node3D
 ##   SEQUENCER    reagent + breath buy new genes for the reward pool
 ##   INCUBATOR    tissue grows traits (Adapt.CRAFT); equip up to trait_slots
 ##   SYRINGE TRAY boosters (scripts/culture/boosters.gd), max 2 carried
-##   TUNING FORK  culture.pitch: fights start louder
+##   PRIMER       culture.primer: the first gene of each fight opens on a HELD chain
 ##   STRAIN STOCK switch strain
 ##   INJECTOR     go in (body map)        DOOR  back to the lab
 ## Debug: --station=<id> starts the hand on that station.
@@ -42,14 +42,14 @@ const STATIONS := {
 		"desc": "Reagent and breath buy new genes."},
 	"incubator": {"name": "INCUBATOR", "pos": Vector3(1.2, 0, -1.0), "hover": 1.3,
 		"desc": "Tissue grows traits. Equip what fits."},
-	"fork": {"name": "TUNING FORK", "pos": Vector3(2.95, 0, -1.0), "hover": 1.4,
-		"desc": "How loud each fight begins."},
+	"primer": {"name": "PRIMER", "pos": Vector3(2.95, 0, -1.0), "hover": 1.4,
+		"desc": "Start each fight already chained."},
 	"door": {"name": "DOOR", "pos": Vector3(4.35, 0, -1.6), "hover": 1.2,
 		"desc": "Back to the lab."},
 }
 
 const VIAL_KEYS := ["clot", "plasma", "alveoli", "myelin", "reagent", "green"]
-const CULTURE_DEFAULTS := {"grown": [], "traits": [], "trait_slots": 1, "boosters": [], "pitch": 0}
+const CULTURE_DEFAULTS := {"grown": [], "traits": [], "trait_slots": 1, "boosters": [], "primer": 0}
 
 var _ops: BenchOps
 var _menus: LabMenus
@@ -196,7 +196,7 @@ func _build_world() -> void:
 	_glow_light = Retro.omni(Color("90f0b0"), 1.8, 0.5, Vector3(0, 0.7, 0.1))
 	inc.add_child(_glow_light)
 
-	_station_root("fork").add_child(Props.fork())
+	_station_root("primer").add_child(Props.primer())
 	_station_root("shelf").add_child(Props.shelf())
 	_station_root("tray").add_child(Props.tray())
 
@@ -250,7 +250,7 @@ func _refresh_all(animate: bool) -> void:
 	_refresh_incubator()
 	_refresh_tray()
 	_refresh_shelf()
-	Props.set_pips(_prop("fork"), int(Game.culture.get("pitch", 0)), BenchOps.PITCH_MAX)
+	Props.set_pips(_prop("primer"), int(Game.culture.get("primer", 0)), BenchOps.PRIMER_MAX)
 	var c := _culture_color()
 	_inj_mat.set_shader_parameter("albedo", c)
 	_inj_mat.set_shader_parameter("emission", c * 0.4)
@@ -411,9 +411,9 @@ func _on_changed(kind: String, arg: String, to: String) -> void:
 			_colony.flash(_trait_color(arg) if kind == "equip" else Color("404850"))
 		"booster", "empty":
 			_refresh_tray()
-		"pitch":
-			Props.set_pips(_prop("fork"), int(arg), BenchOps.PITCH_MAX)
-			_wobble_fork(int(arg))
+		"primer":
+			Props.set_pips(_prop("primer"), int(arg), BenchOps.PRIMER_MAX)
+			_twitch_primer(int(arg))
 		"strain":
 			_refresh_all(true)
 			_colony.flash(Color.WHITE)
@@ -477,14 +477,14 @@ func _drip_target(to: String) -> Vector3:
 	return root.position + Vector3(0, 0.25, 0)
 
 
-func _wobble_fork(p: int) -> void:
-	var prongs := _prop("fork").get_node("Prongs") as Node3D
-	var tw := prongs.create_tween()
-	var amp := 0.06 + p * 0.02
+func _twitch_primer(p: int) -> void:
+	var strand := _prop("primer").get_node("Strand") as Node3D
+	var tw := strand.create_tween()
+	var amp := 0.04 + p * 0.03
 	for i in 6:
-		tw.tween_property(prongs, "rotation:z", amp * (1.0 if i % 2 == 0 else -1.0), 0.04)
+		tw.tween_property(strand, "position:y", 0.12 + amp * (1.0 if i % 2 == 0 else -0.5), 0.05)
 		amp *= 0.7
-	tw.tween_property(prongs, "rotation:z", 0.0, 0.04)
+	tw.tween_property(strand, "position:y", 0.12, 0.05)
 
 
 func _flicker_screen() -> void:
@@ -607,8 +607,8 @@ func _use(id: String) -> void:
 			await _ops.incubator()
 		"tray":
 			await _ops.tray()
-		"fork":
-			await _ops.tune()
+		"primer":
+			await _ops.prime()
 		"shelf":
 			await _ops.pick_strain()
 		"inject":

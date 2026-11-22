@@ -9,13 +9,14 @@ extends Node
 ##   green    true for Green genes (always CLEAN; expressing one adds 1 Uptake → speeds the real infection)
 ##   short    ≤10 chars, the one-line summary on the card face
 ##   desc     full rules text (≤ 2 lines × 46 chars). Mode text is always written as trailing
-##            " LOUD: ..." / " QUIET: ..." segments so the UI can split and brighten the active one.
+##            " DEEP: ..." / " ALONE: ..." segments so the UI can split and brighten the active one.
 ##   fx       effect list (see FX below)
 ##   link     [fx] extra when LINKED (expressed in the slot directly right of the last expressed gene)
+##   reach    2: also LINKS across a one-slot gap (BRIDGE)
 ##   first    [fx] extra when it is the first gene expressed this turn
 ##   dormant  [fx] runs when the gene is SKIPPED (read without being expressed)
-##   loud     [fx] REPLACES fx when Chorus is LOUD (7-10) at the moment of expressing
-##   quiet    [fx] REPLACES fx when Chorus is QUIET (0-3) at the moment of expressing
+##   deep     [fx] REPLACES fx when expressed LINKED at CHAIN x3 or more
+##   lone     [fx] REPLACES fx when expressed unlinked (ALONE: it starts a new chain)
 ##   burn     true: removed from the fight Strand after it is expressed (one-shot)
 ##   grows    N: +N to the gene's numbers each time it is expressed this fight
 ##   breaker  true: its damage counts double toward BREAK
@@ -29,15 +30,11 @@ extends Node
 ##   {"t":"dmg","n":N,"k":K}       deal N (+src grow) K times (k default 1); Film absorbs first
 ##   {"t":"film","n":N}            src gains N Film (Film clears at the start of src's turn)
 ##   {"t":"heal","n":N}            src regains N Colony (up to max)
-##   {"t":"chorus","n":±N}         shared Chorus track, clamped 0..10; reaching 10 RESONATES the pusher
-##   {"t":"chorus_set","n":N}      set Chorus to N
-##   {"t":"if_chorus","min":N,"fx":[..]}  apply nested fx if Chorus ≥ N
-##   {"t":"if_band","band":"quiet"|"hum"|"loud","fx":[..]}  apply nested fx if Chorus is in that band
-##   {"t":"dmg_chorus","mult":M}   deal Chorus × M
-##   {"t":"sing","per":N}          spend ALL Chorus, deal N per point spent (never resonates)
-##   {"t":"silence","per":N}       Chorus → 0, gain N Film per point removed
-##   {"t":"feedback","per":N}      deal N × total absolute Chorus change this turn (both sides)
-##   {"t":"lull","n":N}            enemy's current intent deals N less per hit (min 0); its Chorus gains this turn cancelled
+##   {"t":"chain","n":N}           CHAIN +N (player; capped like any chain)
+##   {"t":"dmg_count","per":N}     deal N × genes already expressed this turn
+##   {"t":"latent","n":N,"turns":T}  plant a Latent on dst that deals N after T of its turns
+##   {"t":"trace"}                 resolved on express: the base fx of the gene on its left (spent or not)
+##   {"t":"lull","n":N}            enemy's current intent deals N less per hit (min 0)
 ##   {"t":"free_next"}             next gene this turn costs 0 (player)
 ##   {"t":"promote"}               if the NEXT gene you express this turn is in the slot directly right, it fires twice
 ##   {"t":"cap","per":N,"what":"dmg"|"film"}  deal / gain N × current CHAIN, then CHAIN = 0 (terminator)
@@ -49,7 +46,6 @@ extends Node
 ##   {"t":"stagger_dmg","n":N}     deal N, doubled if the enemy is winding up (intent has `break`)
 ##   {"t":"charge","n":N}          +N Charge now (player)
 ##   {"t":"charge_next","n":N}     +N Charge next turn (player)
-##   {"t":"drifter","burst":N,"latent":M,"turns":T}  Chorus < 5: deal N now. Else plant a Latent on dst that deals M after T turns
 ##   {"t":"hop","ahead":A}         copy this gene A slots ahead in the fight Strand, overwriting (silencing) what was there
 ##   {"t":"ledger"}                record the enemy's current intent id for the rest of the run (max 3); recorded intents fizzle
 ##   {"t":"tripwire"}              arm a trap: the next enemy plant/uproot/drain is cancelled; you lose 3 Colony
@@ -67,7 +63,7 @@ extends Node
 ##   {"t":"sweep"}                 at this END the whole window is read (NEXT counts as skipped)
 ##   {"t":"scramble"}              shuffle the unspent window at the start of the next player turn
 ##   {"t":"mimic_last"}            express a copy of the last gene the player expressed (via mimic_pattern)
-##   {"t":"steal_chorus","n":N}    Chorus −N; enemy gains Film equal to the amount taken
+##   {"t":"sever","n":N}           on reveal, mark N READ genes: a SEVERED gene can never be LINKED into
 ## Intent: {"id": unique-for-Ledger, "name": ≤12 chars, "fx": [...], "break": N (optional wind-up)}
 
 const CARDS := {
@@ -78,72 +74,70 @@ const CARDS := {
 		"up": {"short": "DMG 9", "desc": "Deal 9. LINK: deal 4 more.",
 			"fx": [{"t": "dmg", "n": 9}], "link": [{"t": "dmg", "n": 4}]}},
 	"swarm": {"name": "SWARM", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "DMG 3x2", "desc": "Deal 3 twice. LINK: hit once more. LOUD: deal 3 three times.",
+		"short": "DMG 3x2", "desc": "Deal 3 twice. LINK: hit once more. DEEP: deal 3 three times.",
 		"fx": [{"t": "dmg", "n": 3, "k": 2}], "link": [{"t": "dmg", "n": 3}],
-		"loud": [{"t": "dmg", "n": 3, "k": 3}],
-		"up": {"short": "DMG 4x2", "desc": "Deal 4 twice. LINK: hit once more. LOUD: deal 4 three times.",
+		"deep": [{"t": "dmg", "n": 3, "k": 3}],
+		"up": {"short": "DMG 4x2", "desc": "Deal 4 twice. LINK: hit once more. DEEP: deal 4 three times.",
 			"fx": [{"t": "dmg", "n": 4, "k": 2}], "link": [{"t": "dmg", "n": 4}],
-			"loud": [{"t": "dmg", "n": 4, "k": 3}]}},
+			"deep": [{"t": "dmg", "n": 4, "k": 3}]}},
 	"spike": {"name": "SPIKE", "cost": 2, "kind": "gene", "rarity": "common", "green": false,
-		"short": "DMG 11", "desc": "Deal 11. FIRST: deal 4 more. QUIET: deal 16.",
-		"fx": [{"t": "dmg", "n": 11}], "first": [{"t": "dmg", "n": 4}],
-		"quiet": [{"t": "dmg", "n": 16}],
-		"up": {"short": "DMG 14", "desc": "Deal 14. FIRST: deal 5 more. QUIET: deal 20.",
-			"fx": [{"t": "dmg", "n": 14}], "first": [{"t": "dmg", "n": 5}],
-			"quiet": [{"t": "dmg", "n": 20}]}},
+		"short": "DMG 11", "desc": "Deal 11. ALONE: deal 16.",
+		"fx": [{"t": "dmg", "n": 11}], "lone": [{"t": "dmg", "n": 16}],
+		"up": {"short": "DMG 14", "desc": "Deal 14. ALONE: deal 20.",
+			"fx": [{"t": "dmg", "n": 14}], "lone": [{"t": "dmg", "n": 20}]}},
 	"siphon": {"name": "SIPHON", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "DRAIN 5", "desc": "Deal 5. Regain what gets through. LOUD: drain 8.",
-		"fx": [{"t": "drain", "n": 5}], "loud": [{"t": "drain", "n": 8}],
-		"up": {"short": "DRAIN 7", "desc": "Deal 7. Regain what gets through. LOUD: drain 11.",
-			"fx": [{"t": "drain", "n": 7}], "loud": [{"t": "drain", "n": 11}]}},
+		"short": "DRAIN 5", "desc": "Deal 5. Regain what gets through. DEEP: drain 8.",
+		"fx": [{"t": "drain", "n": 5}], "deep": [{"t": "drain", "n": 8}],
+		"up": {"short": "DRAIN 7", "desc": "Deal 7. Regain what gets through. DEEP: drain 11.",
+			"fx": [{"t": "drain", "n": 7}], "deep": [{"t": "drain", "n": 11}]}},
 	"rot": {"name": "ROT", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "ROT 3x3", "desc": "Enemy loses 3 at the start of its next 3 turns. LOUD: 4 per turn.",
-		"fx": [{"t": "rot", "n": 3, "turns": 3}], "loud": [{"t": "rot", "n": 4, "turns": 3}],
-		"up": {"short": "ROT 4x3", "desc": "Enemy loses 4 at the start of its next 3 turns. LOUD: 6 per turn.",
-			"fx": [{"t": "rot", "n": 4, "turns": 3}], "loud": [{"t": "rot", "n": 6, "turns": 3}]}},
+		"short": "ROT 3x3", "desc": "Enemy loses 3 at the start of its next 3 turns. DEEP: 4 per turn.",
+		"fx": [{"t": "rot", "n": 3, "turns": 3}], "deep": [{"t": "rot", "n": 4, "turns": 3}],
+		"up": {"short": "ROT 4x3", "desc": "Enemy loses 4 at the start of its next 3 turns. DEEP: 6 per turn.",
+			"fx": [{"t": "rot", "n": 4, "turns": 3}], "deep": [{"t": "rot", "n": 6, "turns": 3}]}},
 	"needle": {"name": "NEEDLE", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
-		"short": "DMG 3", "desc": "Deal 3. LINK: +1 Charge. QUIET: deal 6.",
+		"short": "DMG 3", "desc": "Deal 3. LINK: +1 Charge. ALONE: deal 6.",
 		"fx": [{"t": "dmg", "n": 3}], "link": [{"t": "charge", "n": 1}],
-		"quiet": [{"t": "dmg", "n": 6}],
-		"up": {"short": "DMG 5", "desc": "Deal 5. LINK: +1 Charge. QUIET: deal 8.",
-			"fx": [{"t": "dmg", "n": 5}], "quiet": [{"t": "dmg", "n": 8}]}},
+		"lone": [{"t": "dmg", "n": 6}],
+		"up": {"short": "DMG 5", "desc": "Deal 5. LINK: +1 Charge. ALONE: deal 8.",
+			"fx": [{"t": "dmg", "n": 5}], "lone": [{"t": "dmg", "n": 8}]}},
 	"lance": {"name": "LANCE", "cost": 2, "kind": "gene", "rarity": "rare", "green": false,
 		"short": "BREAK 8", "desc": "Deal 8, doubled vs a wind-up. Counts double toward BREAK.",
 		"fx": [{"t": "stagger_dmg", "n": 8}], "breaker": true,
 		"up": {"short": "BREAK 11", "desc": "Deal 11, doubled vs a wind-up. Counts double toward BREAK.",
 			"fx": [{"t": "stagger_dmg", "n": 11}]}},
 	"cascade": {"name": "CASCADE", "cost": 2, "kind": "gene", "rarity": "rare", "green": false,
-		"short": "4 x CHAIN", "desc": "Deal 4 per CHAIN step, then the chain ends. LOUD: 6 per step.",
-		"fx": [{"t": "cap", "per": 4, "what": "dmg"}], "loud": [{"t": "cap", "per": 6, "what": "dmg"}],
-		"up": {"short": "5 x CHAIN", "desc": "Deal 5 per CHAIN step, then the chain ends. LOUD: 8 per step.",
-			"fx": [{"t": "cap", "per": 5, "what": "dmg"}], "loud": [{"t": "cap", "per": 8, "what": "dmg"}]}},
+		"short": "4 x CHAIN", "desc": "Deal 4 per CHAIN step, then the chain ends. DEEP: 6 per step.",
+		"fx": [{"t": "cap", "per": 4, "what": "dmg"}], "deep": [{"t": "cap", "per": 6, "what": "dmg"}],
+		"up": {"short": "5 x CHAIN", "desc": "Deal 5 per CHAIN step, then the chain ends. DEEP: 8 per step.",
+			"fx": [{"t": "cap", "per": 5, "what": "dmg"}], "deep": [{"t": "cap", "per": 8, "what": "dmg"}]}},
 	"fever": {"name": "FEVER", "cost": 1, "kind": "gene", "rarity": "uncommon", "green": false,
-		"short": "DMG14 -4C", "desc": "Deal 14. Lose 4 Colony. LOUD: deal 20, lose 4.",
+		"short": "DMG14 -4C", "desc": "Deal 14. Lose 4 Colony. DEEP: deal 20, lose 4.",
 		"fx": [{"t": "dmg", "n": 14}, {"t": "self", "n": 4}],
-		"loud": [{"t": "dmg", "n": 20}, {"t": "self", "n": 4}],
-		"up": {"short": "DMG18 -3C", "desc": "Deal 18. Lose 3 Colony. LOUD: deal 24, lose 3.",
+		"deep": [{"t": "dmg", "n": 20}, {"t": "self", "n": 4}],
+		"up": {"short": "DMG18 -3C", "desc": "Deal 18. Lose 3 Colony. DEEP: deal 24, lose 3.",
 			"fx": [{"t": "dmg", "n": 18}, {"t": "self", "n": 3}],
-			"loud": [{"t": "dmg", "n": 24}, {"t": "self", "n": 3}]}},
+			"deep": [{"t": "dmg", "n": 24}, {"t": "self", "n": 3}]}},
 	"bloom": {"name": "BLOOM", "cost": 1, "kind": "gene", "rarity": "rare", "green": false,
-		"short": "DMG 4 GRW", "desc": "Deal 4. GROWS: +3 each time it is expressed. LOUD: deal 8.",
-		"fx": [{"t": "dmg", "n": 4}], "grows": 3, "loud": [{"t": "dmg", "n": 8}],
-		"up": {"short": "DMG 5 GRW", "desc": "Deal 5. GROWS: +4 each time it is expressed. LOUD: deal 10.",
-			"fx": [{"t": "dmg", "n": 5}], "grows": 4, "loud": [{"t": "dmg", "n": 10}]}},
+		"short": "DMG 4 GRW", "desc": "Deal 4. GROWS: +3 each time it is expressed. DEEP: deal 8.",
+		"fx": [{"t": "dmg", "n": 4}], "grows": 3, "deep": [{"t": "dmg", "n": 8}],
+		"up": {"short": "DMG 5 GRW", "desc": "Deal 5. GROWS: +4 each time it is expressed. DEEP: deal 10.",
+			"fx": [{"t": "dmg", "n": 5}], "grows": 4, "deep": [{"t": "dmg", "n": 10}]}},
 	"quorum": {"name": "QUORUM", "cost": 1, "kind": "gene", "rarity": "uncommon", "green": false,
-		"short": "DMG=CHOR", "desc": "Deal damage equal to the Chorus.",
-		"fx": [{"t": "dmg_chorus", "mult": 1}],
-		"up": {"short": "CHOR+4", "desc": "Deal damage equal to the Chorus, plus 4.",
-			"fx": [{"t": "dmg_chorus", "mult": 1}, {"t": "dmg", "n": 4}]}},
-	"crescendo": {"name": "CRESCEND", "cost": 2, "kind": "gene", "rarity": "uncommon", "green": false,
-		"short": "CHOR8:22", "desc": "Chorus +2. Then if Chorus is 8 or more: deal 22.",
-		"fx": [{"t": "chorus", "n": 2}, {"t": "if_chorus", "min": 8, "fx": [{"t": "dmg", "n": 22}]}],
-		"up": {"short": "CHOR8:26", "desc": "Chorus +3. Then if Chorus is 8 or more: deal 26.",
-			"fx": [{"t": "chorus", "n": 3}, {"t": "if_chorus", "min": 8, "fx": [{"t": "dmg", "n": 26}]}]}},
+		"short": "4 x COUNT", "desc": "Deal 4 per gene you already expressed this turn.",
+		"fx": [{"t": "dmg_count", "per": 4}],
+		"up": {"short": "6 x COUNT", "desc": "Deal 6 per gene you already expressed this turn.",
+			"fx": [{"t": "dmg_count", "per": 6}]}},
+	"crescendo": {"name": "TORRENT", "cost": 2, "kind": "gene", "rarity": "uncommon", "green": false,
+		"short": "DMG 6/22", "desc": "Deal 6. DEEP: deal 22.",
+		"fx": [{"t": "dmg", "n": 6}], "deep": [{"t": "dmg", "n": 22}],
+		"up": {"short": "DMG 8/26", "desc": "Deal 8. DEEP: deal 26.",
+			"fx": [{"t": "dmg", "n": 8}], "deep": [{"t": "dmg", "n": 26}]}},
 	"drifter": {"name": "DRIFTER", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "BURST/SET", "desc": "Chorus under 5: deal 9 now. Else SETTLE: 15 damage in 2 turns.",
-		"fx": [{"t": "drifter", "burst": 9, "latent": 15, "turns": 2}],
-		"up": {"short": "BURST/SET", "desc": "Chorus under 5: deal 12 now. Else SETTLE: 20 damage in 2 turns.",
-			"fx": [{"t": "drifter", "burst": 12, "latent": 20, "turns": 2}]}},
+		"short": "SETTLE 15", "desc": "Plant a Latent: 15 damage in 2 turns. ALONE: deal 9 now instead.",
+		"fx": [{"t": "latent", "n": 15, "turns": 2}], "lone": [{"t": "dmg", "n": 9}],
+		"up": {"short": "SETTLE 20", "desc": "Plant a Latent: 20 damage in 2 turns. ALONE: deal 12 now instead.",
+			"fx": [{"t": "latent", "n": 20, "turns": 2}], "lone": [{"t": "dmg", "n": 12}]}},
 	"hopper": {"name": "HOPPER", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
 		"short": "DMG 4 HOP", "desc": "Deal 4. HOP: copies itself 5 slots ahead, over what is there.",
 		"fx": [{"t": "dmg", "n": 4}, {"t": "hop", "ahead": 5}],
@@ -152,121 +146,93 @@ const CARDS := {
 
 	# ================================================================ DEFENCE
 	"film": {"name": "FILM", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "FILM 5", "desc": "Gain 5 Film. LINK: gain 3 more. QUIET: gain 8.",
+		"short": "FILM 5", "desc": "Gain 5 Film. LINK: gain 3 more. ALONE: gain 8.",
 		"fx": [{"t": "film", "n": 5}], "link": [{"t": "film", "n": 3}],
-		"quiet": [{"t": "film", "n": 8}],
-		"up": {"short": "FILM 7", "desc": "Gain 7 Film. LINK: gain 4 more. QUIET: gain 11.",
+		"lone": [{"t": "film", "n": 8}],
+		"up": {"short": "FILM 7", "desc": "Gain 7 Film. LINK: gain 4 more. ALONE: gain 11.",
 			"fx": [{"t": "film", "n": 7}], "link": [{"t": "film", "n": 4}],
-			"quiet": [{"t": "film", "n": 11}]}},
+			"lone": [{"t": "film", "n": 11}]}},
 	"membrane": {"name": "MEMBRANE", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "FILM 5", "desc": "Gain 5 Film. LOUD: gain 10.",
-		"fx": [{"t": "film", "n": 5}], "loud": [{"t": "film", "n": 10}],
-		"up": {"short": "FILM 7", "desc": "Gain 7 Film. LOUD: gain 13.",
-			"fx": [{"t": "film", "n": 7}], "loud": [{"t": "film", "n": 13}]}},
+		"short": "FILM 5", "desc": "Gain 5 Film. DEEP: gain 10.",
+		"fx": [{"t": "film", "n": 5}], "deep": [{"t": "film", "n": 10}],
+		"up": {"short": "FILM 7", "desc": "Gain 7 Film. DEEP: gain 13.",
+			"fx": [{"t": "film", "n": 7}], "deep": [{"t": "film", "n": 13}]}},
 	"sporewall": {"name": "BULWARK", "cost": 2, "kind": "gene", "rarity": "uncommon", "green": false,
 		"short": "FILM 12", "desc": "Gain 12 Film.",
 		"fx": [{"t": "film", "n": 12}],
 		"up": {"short": "FILM 16", "desc": "Gain 16 Film.", "fx": [{"t": "film", "n": 16}]}},
 	"clot": {"name": "CLOT", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "FILM 6", "desc": "Gain 6 Film. DORMANT: gain 4 Film. QUIET: gain 9.",
+		"short": "FILM 6", "desc": "Gain 6 Film. DORMANT: gain 4 Film. ALONE: gain 9.",
 		"fx": [{"t": "film", "n": 6}], "dormant": [{"t": "film", "n": 4}],
-		"quiet": [{"t": "film", "n": 9}],
-		"up": {"short": "FILM 8", "desc": "Gain 8 Film. DORMANT: gain 6 Film. QUIET: gain 12.",
+		"lone": [{"t": "film", "n": 9}],
+		"up": {"short": "FILM 8", "desc": "Gain 8 Film. DORMANT: gain 6 Film. ALONE: gain 12.",
 			"fx": [{"t": "film", "n": 8}], "dormant": [{"t": "film", "n": 6}],
-			"quiet": [{"t": "film", "n": 12}]}},
+			"lone": [{"t": "film", "n": 12}]}},
 	"cyst": {"name": "CYST", "cost": 0, "kind": "gene", "rarity": "rare", "green": false,
 		"short": "SKIP:FILM7", "desc": "Gain 2 Film. DORMANT: gain 7 Film.",
 		"fx": [{"t": "film", "n": 2}], "dormant": [{"t": "film", "n": 7}],
 		"up": {"short": "SKIP:FLM10", "desc": "Gain 3 Film. DORMANT: gain 10 Film.",
 			"fx": [{"t": "film", "n": 3}], "dormant": [{"t": "film", "n": 10}]}},
-	"hush": {"name": "HUSH", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "FILM6 CH-3", "desc": "Gain 6 Film. Chorus -3. QUIET: gain 10 Film.",
-		"fx": [{"t": "film", "n": 6}, {"t": "chorus", "n": -3}],
-		"quiet": [{"t": "film", "n": 10}],
-		"up": {"short": "FILM8 CH-3", "desc": "Gain 8 Film. Chorus -3. QUIET: gain 13 Film.",
-			"fx": [{"t": "film", "n": 8}, {"t": "chorus", "n": -3}],
-			"quiet": [{"t": "film", "n": 13}]}},
+	"hush": {"name": "SHELL", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
+		"short": "FILM 4", "desc": "Gain 4 Film. ALONE: gain 10.",
+		"fx": [{"t": "film", "n": 4}], "lone": [{"t": "film", "n": 10}],
+		"up": {"short": "FILM 6", "desc": "Gain 6 Film. ALONE: gain 13.",
+			"fx": [{"t": "film", "n": 6}], "lone": [{"t": "film", "n": 13}]}},
 	"mirror": {"name": "MIRROR", "cost": 1, "kind": "gene", "rarity": "rare", "green": false,
-		"short": "FILM=HIT", "desc": "Gain Film equal to the enemy's intent damage. LOUD: also Chorus -3.",
-		"fx": [{"t": "mirror"}], "loud": [{"t": "mirror"}, {"t": "chorus", "n": -3}],
-		"up": {"short": "FILM=HIT+3", "desc": "Gain Film equal to the intent damage, +3. LOUD: also Chorus -3.",
-			"fx": [{"t": "mirror"}, {"t": "film", "n": 3}],
-			"loud": [{"t": "mirror"}, {"t": "film", "n": 3}, {"t": "chorus", "n": -3}]}},
+		"short": "FILM=HIT", "desc": "Gain Film equal to the enemy's intent damage. LINK: +3 Film.",
+		"fx": [{"t": "mirror"}], "link": [{"t": "film", "n": 3}],
+		"up": {"short": "FILM=HIT+3", "desc": "Gain Film equal to the intent damage, +3. LINK: +3 Film.",
+			"fx": [{"t": "mirror"}, {"t": "film", "n": 3}]}},
 	"terminator": {"name": "TERMINUS", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "3 x CHAIN", "desc": "Gain 3 Film per CHAIN step, then the chain ends. QUIET: 5 per step.",
-		"fx": [{"t": "cap", "per": 3, "what": "film"}], "quiet": [{"t": "cap", "per": 5, "what": "film"}],
-		"up": {"short": "4 x CHAIN", "desc": "Gain 4 Film per CHAIN step, then the chain ends. QUIET: 6 per step.",
-			"fx": [{"t": "cap", "per": 4, "what": "film"}], "quiet": [{"t": "cap", "per": 6, "what": "film"}]}},
+		"short": "3 x CHAIN", "desc": "Gain 3 Film per CHAIN step, then the chain ends. DEEP: 5 per step.",
+		"fx": [{"t": "cap", "per": 3, "what": "film"}], "deep": [{"t": "cap", "per": 5, "what": "film"}],
+		"up": {"short": "4 x CHAIN", "desc": "Gain 4 Film per CHAIN step, then the chain ends. DEEP: 6 per step.",
+			"fx": [{"t": "cap", "per": 4, "what": "film"}], "deep": [{"t": "cap", "per": 6, "what": "film"}]}},
 
 	# ================================================================ HEAL
 	"divide": {"name": "DIVIDE", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "HEAL 5", "desc": "Regain 5 Colony. LINK: regain 3 more. LOUD: regain 9.",
+		"short": "HEAL 5", "desc": "Regain 5 Colony. LINK: regain 3 more. DEEP: regain 9.",
 		"fx": [{"t": "heal", "n": 5}], "link": [{"t": "heal", "n": 3}],
-		"loud": [{"t": "heal", "n": 9}],
-		"up": {"short": "HEAL 7", "desc": "Regain 7 Colony. LINK: regain 4 more. LOUD: regain 12.",
+		"deep": [{"t": "heal", "n": 9}],
+		"up": {"short": "HEAL 7", "desc": "Regain 7 Colony. LINK: regain 4 more. DEEP: regain 12.",
 			"fx": [{"t": "heal", "n": 7}], "link": [{"t": "heal", "n": 4}],
-			"loud": [{"t": "heal", "n": 12}]}},
+			"deep": [{"t": "heal", "n": 12}]}},
 
-	# ================================================================ VOICE (Chorus)
+	# ================================================================ ORDER (chain openers, bridges, copies)
 	"signal": {"name": "SIGNAL", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
-		"short": "CHORUS +2", "desc": "Chorus +2. LINK: Chorus +1 more. LOUD: Chorus +1, pull 1 gene.",
-		"fx": [{"t": "chorus", "n": 2}], "link": [{"t": "chorus", "n": 1}],
-		"loud": [{"t": "chorus", "n": 1}, {"t": "pull", "n": 1}],
-		"up": {"short": "CHORUS +3", "desc": "Chorus +3. LINK: Chorus +1 more. LOUD: Chorus +1, pull 2 genes.",
-			"fx": [{"t": "chorus", "n": 3}],
-			"loud": [{"t": "chorus", "n": 1}, {"t": "pull", "n": 2}]}},
-	"harmonic": {"name": "HARMONIC", "cost": 1, "kind": "gene", "rarity": "uncommon", "green": false,
-		"short": "CH+1 FILM2", "desc": "Chorus +1, gain 2 Film. Each CHAIN step adds 1 to both.",
-		"fx": [{"t": "chorus", "n": 1}, {"t": "film", "n": 2}],
-		"up": {"short": "CH+1 FILM4", "desc": "Chorus +1, gain 4 Film. Each CHAIN step adds 1 to both.",
-			"fx": [{"t": "chorus", "n": 1}, {"t": "film", "n": 4}]}},
-	"hymn": {"name": "HYMN", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "CH+3 FILM3", "desc": "Chorus +3, gain 3 Film. LOUD: deal 9 instead.",
-		"fx": [{"t": "chorus", "n": 3}, {"t": "film", "n": 3}], "loud": [{"t": "dmg", "n": 9}],
-		"up": {"short": "CH+3 FILM5", "desc": "Chorus +3, gain 5 Film. LOUD: deal 12 instead.",
-			"fx": [{"t": "chorus", "n": 3}, {"t": "film", "n": 5}], "loud": [{"t": "dmg", "n": 12}]}},
-	"sing": {"name": "SING", "cost": 1, "kind": "gene", "rarity": "uncommon", "green": false,
-		"short": "2 x CHORUS", "desc": "Spend ALL Chorus. Deal 2 per point spent.",
-		"fx": [{"t": "sing", "per": 2}],
-		"up": {"short": "3 x CHORUS", "desc": "Spend ALL Chorus. Deal 3 per point spent.",
-			"fx": [{"t": "sing", "per": 3}]}},
-	"drone": {"name": "DRONE", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
-		"short": "CHORUS=5", "desc": "Set Chorus to 5. Gain 3 Film.",
-		"fx": [{"t": "chorus_set", "n": 5}, {"t": "film", "n": 3}],
-		"up": {"short": "CHORUS=5", "desc": "Set Chorus to 5. Gain 5 Film.",
-			"fx": [{"t": "chorus_set", "n": 5}, {"t": "film", "n": 5}]}},
-	"chant": {"name": "CHANT", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "DMG3 CH+1", "desc": "Deal 3. Chorus +1. LINK: Chorus +1 more.",
-		"fx": [{"t": "dmg", "n": 3}, {"t": "chorus", "n": 1}], "link": [{"t": "chorus", "n": 1}],
-		"up": {"short": "DMG5 CH+1", "desc": "Deal 5. Chorus +1. LINK: Chorus +1 more.",
-			"fx": [{"t": "dmg", "n": 5}, {"t": "chorus", "n": 1}]}},
-	"silence": {"name": "SILENCE", "cost": 1, "kind": "gene", "rarity": "uncommon", "green": false,
-		"short": "2 x CH FLM", "desc": "Chorus to 0. Gain 2 Film per point removed.",
-		"fx": [{"t": "silence", "per": 2}],
-		"up": {"short": "3 x CH FLM", "desc": "Chorus to 0. Gain 3 Film per point removed.",
-			"fx": [{"t": "silence", "per": 3}]}},
-	"whisper": {"name": "WHISPER", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
-		"short": "DMG 4", "desc": "Deal 4. QUIET: deal 9, +1 splice.",
-		"fx": [{"t": "dmg", "n": 4}], "quiet": [{"t": "dmg", "n": 9}, {"t": "splice", "n": 1}],
-		"up": {"short": "DMG 6", "desc": "Deal 6. QUIET: deal 12, +1 splice.",
-			"fx": [{"t": "dmg", "n": 6}], "quiet": [{"t": "dmg", "n": 12}, {"t": "splice", "n": 1}]}},
-	"shriek": {"name": "SHRIEK", "cost": 2, "kind": "gene", "rarity": "uncommon", "green": false,
-		"short": "DMG10 CH+3", "desc": "Deal 10. Chorus +3. LOUD: deal 18, Chorus +1.",
-		"fx": [{"t": "dmg", "n": 10}, {"t": "chorus", "n": 3}],
-		"loud": [{"t": "dmg", "n": 18}, {"t": "chorus", "n": 1}],
-		"up": {"short": "DMG13 CH+3", "desc": "Deal 13. Chorus +3. LOUD: deal 23, Chorus +1.",
-			"fx": [{"t": "dmg", "n": 13}, {"t": "chorus", "n": 3}],
-			"loud": [{"t": "dmg", "n": 23}, {"t": "chorus", "n": 1}]}},
-	"lullaby": {"name": "LULLABY", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "LULL 4", "desc": "Enemy intent deals 4 less per hit. Chorus -2. QUIET: 8 less.",
-		"fx": [{"t": "lull", "n": 4}, {"t": "chorus", "n": -2}], "quiet": [{"t": "lull", "n": 8}],
-		"up": {"short": "LULL 6", "desc": "Enemy intent deals 6 less per hit. Chorus -2. QUIET: 10 less.",
-			"fx": [{"t": "lull", "n": 6}, {"t": "chorus", "n": -2}], "quiet": [{"t": "lull", "n": 10}]}},
-	"feedback": {"name": "FEEDBACK", "cost": 1, "kind": "gene", "rarity": "uncommon", "green": false,
-		"short": "2 x SHIFT", "desc": "Deal 2 per point the Chorus moved this turn, both sides.",
-		"fx": [{"t": "feedback", "per": 2}],
-		"up": {"short": "3 x SHIFT", "desc": "Deal 3 per point the Chorus moved this turn, both sides.",
-			"fx": [{"t": "feedback", "per": 3}]}},
+		"short": "FILM 2", "desc": "Gain 2 Film. ALONE: the chain starts at x2.",
+		"fx": [{"t": "film", "n": 2}], "lone": [{"t": "film", "n": 2}, {"t": "chain", "n": 1}],
+		"up": {"short": "FILM 4", "desc": "Gain 4 Film. ALONE: the chain starts at x2.",
+			"fx": [{"t": "film", "n": 4}], "lone": [{"t": "film", "n": 4}, {"t": "chain", "n": 1}]}},
+	"hymn": {"name": "SPOOL", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
+		"short": "FILM 3", "desc": "Gain 3 Film. DEEP: deal 9 instead.",
+		"fx": [{"t": "film", "n": 3}], "deep": [{"t": "dmg", "n": 9}],
+		"up": {"short": "FILM 5", "desc": "Gain 5 Film. DEEP: deal 12 instead.",
+			"fx": [{"t": "film", "n": 5}], "deep": [{"t": "dmg", "n": 12}]}},
+	"drone": {"name": "BRIDGE", "cost": 1, "kind": "gene", "rarity": "common", "green": false, "reach": 2,
+		"short": "DMG 5", "desc": "Deal 5. REACH: links across a one-slot gap.",
+		"fx": [{"t": "dmg", "n": 5}],
+		"up": {"short": "DMG 7", "desc": "Deal 7. REACH: links across a one-slot gap.",
+			"fx": [{"t": "dmg", "n": 7}]}},
+	"chant": {"name": "STITCH", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
+		"short": "DMG 4", "desc": "Deal 4. LINK: +1 splice this turn.",
+		"fx": [{"t": "dmg", "n": 4}], "link": [{"t": "splice", "n": 1}],
+		"up": {"short": "DMG 6", "desc": "Deal 6. LINK: +1 splice this turn.",
+			"fx": [{"t": "dmg", "n": 6}]}},
+	"trace": {"name": "TRACE", "cost": 1, "kind": "gene", "rarity": "uncommon", "green": false,
+		"short": "COPY LEFT", "desc": "Copy the base effect of the gene on its left, spent or not.",
+		"fx": [{"t": "trace"}],
+		"up": {"cost": 0}},
+	"whisper": {"name": "STRAY", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
+		"short": "DMG 2", "desc": "Deal 2. ALONE: deal 5, +1 splice.",
+		"fx": [{"t": "dmg", "n": 2}], "lone": [{"t": "dmg", "n": 5}, {"t": "splice", "n": 1}],
+		"up": {"short": "DMG 4", "desc": "Deal 4. ALONE: deal 8, +1 splice.",
+			"fx": [{"t": "dmg", "n": 4}], "lone": [{"t": "dmg", "n": 8}, {"t": "splice", "n": 1}]}},
+	"lullaby": {"name": "SEDATE", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
+		"short": "LULL 4", "desc": "Enemy intent deals 4 less per hit. ALONE: 8 less.",
+		"fx": [{"t": "lull", "n": 4}], "lone": [{"t": "lull", "n": 8}],
+		"up": {"short": "LULL 6", "desc": "Enemy intent deals 6 less per hit. ALONE: 10 less.",
+			"fx": [{"t": "lull", "n": 6}], "lone": [{"t": "lull", "n": 10}]}},
 
 	# ================================================================ ENGINE / UTILITY
 	"promoter": {"name": "PROMOTER", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
@@ -275,8 +241,8 @@ const CARDS := {
 		"up": {"short": "NEXT x2 +F", "desc": "Gain 3 Film. Express the gene right of this next: it fires twice.",
 			"fx": [{"t": "film", "n": 3}, {"t": "promote"}]}},
 	"catalyst": {"name": "CATALYST", "cost": 1, "kind": "gene", "rarity": "common", "green": false,
-		"short": "+2 CHG NXT", "desc": "+2 Charge next turn. QUIET: +3 Charge next turn.",
-		"fx": [{"t": "charge_next", "n": 2}], "quiet": [{"t": "charge_next", "n": 3}],
+		"short": "+2 CHG NXT", "desc": "+2 Charge next turn. ALONE: +3 Charge next turn.",
+		"fx": [{"t": "charge_next", "n": 2}], "lone": [{"t": "charge_next", "n": 3}],
 		"up": {"cost": 0}},
 	"splicer": {"name": "SPLICER", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
 		"short": "+2 SPLICE", "desc": "+2 splices this turn. LINK: +1 Charge.",
@@ -298,7 +264,7 @@ const CARDS := {
 		"fx": [{"t": "dmg", "n": 4}], "dormant": [{"t": "charge_next", "n": 1}],
 		"up": {"short": "DMG 7", "desc": "Deal 7. DORMANT: +1 Charge next turn.",
 			"fx": [{"t": "dmg", "n": 7}]}},
-	"primer": {"name": "PRIMER", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
+	"primer": {"name": "OPENER", "cost": 0, "kind": "gene", "rarity": "common", "green": false,
 		"short": "FILM 3", "desc": "Gain 3 Film. FIRST: +1 Charge.",
 		"fx": [{"t": "film", "n": 3}], "first": [{"t": "charge", "n": 1}],
 		"up": {"short": "FILM 5", "desc": "Gain 5 Film. FIRST: +1 Charge.",
@@ -340,20 +306,20 @@ const CARDS := {
 
 	# ================================================================ GREEN (taken from the thing inside you)
 	"g_lash": {"name": "G.LASH", "cost": 0, "kind": "gene", "rarity": "rare", "green": true,
-		"short": "DMG 9", "desc": "GREEN. Deal 9. +1 UPTAKE. LOUD: deal 14.",
-		"fx": [{"t": "dmg", "n": 9}], "loud": [{"t": "dmg", "n": 14}],
-		"up": {"short": "DMG 12", "desc": "GREEN. Deal 12. +1 UPTAKE. LOUD: deal 18.",
-			"fx": [{"t": "dmg", "n": 12}], "loud": [{"t": "dmg", "n": 18}]}},
+		"short": "DMG 9", "desc": "GREEN. Deal 9. +1 UPTAKE. DEEP: deal 14.",
+		"fx": [{"t": "dmg", "n": 9}], "deep": [{"t": "dmg", "n": 14}],
+		"up": {"short": "DMG 12", "desc": "GREEN. Deal 12. +1 UPTAKE. DEEP: deal 18.",
+			"fx": [{"t": "dmg", "n": 12}], "deep": [{"t": "dmg", "n": 18}]}},
 	"g_root": {"name": "G.ROOT", "cost": 1, "kind": "gene", "rarity": "rare", "green": true,
 		"short": "FILM10 +4", "desc": "GREEN. Gain 10 Film, regain 4 Colony. +1 UPTAKE.",
 		"fx": [{"t": "film", "n": 10}, {"t": "heal", "n": 4}],
 		"up": {"short": "FILM13 +6", "desc": "GREEN. Gain 13 Film, regain 6 Colony. +1 UPTAKE.",
 			"fx": [{"t": "film", "n": 13}, {"t": "heal", "n": 6}]}},
-	"g_chorus": {"name": "G.CHORUS", "cost": 0, "kind": "gene", "rarity": "rare", "green": true,
-		"short": "CH+4 +1C", "desc": "GREEN. Chorus +4. +1 Charge now. +1 UPTAKE.",
-		"fx": [{"t": "chorus", "n": 4}, {"t": "charge", "n": 1}],
-		"up": {"short": "CH+4 +2C", "desc": "GREEN. Chorus +4. +2 Charge now. +1 UPTAKE.",
-			"fx": [{"t": "chorus", "n": 4}, {"t": "charge", "n": 2}]}},
+	"g_chorus": {"name": "G.CHAIN", "cost": 0, "kind": "gene", "rarity": "rare", "green": true,
+		"short": "CH+2 +1C", "desc": "GREEN. CHAIN +2. +1 Charge now. +1 UPTAKE.",
+		"fx": [{"t": "chain", "n": 2}, {"t": "charge", "n": 1}],
+		"up": {"short": "CH+2 +2C", "desc": "GREEN. CHAIN +2. +2 Charge now. +1 UPTAKE.",
+			"fx": [{"t": "chain", "n": 2}, {"t": "charge", "n": 2}]}},
 	"g_bloom": {"name": "G.BLOOM", "cost": 1, "kind": "gene", "rarity": "rare", "green": true,
 		"short": "DMG 5x3", "desc": "GREEN. Deal 5 three times. +1 UPTAKE.",
 		"fx": [{"t": "dmg", "n": 5, "k": 3}],
@@ -382,15 +348,15 @@ const STRAINS := {
 	"scrubber": {"name": "SCRUBBER", "desc": "Attrition. Film and steady damage.",
 		"color": Color("58a8e8"),
 		"strand": ["promoter", "spike", "lyse", "lyse", "film", "signal", "membrane", "film"]},
-	"courier": {"name": "COURIER", "desc": "Signals, drifters and theft.",
+	"courier": {"name": "COURIER", "desc": "Openers, drifters and theft.",
 		"color": Color("70c8a0"),
 		"strand": ["signal", "lyse", "film", "drifter", "signal", "hopper", "ledger", "film"]},
 	"lytic": {"name": "LYTIC", "desc": "Sleeps, then bursts. Skips pay; chains end hard.",
 		"color": Color("e06048"),
 		"strand": ["cyst", "needle", "lyse", "cascade", "clot", "spore", "film", "terminator"]},
-	"cantor": {"name": "CANTOR", "desc": "Voice. Raise the Chorus, then spend it.",
+	"weaver": {"name": "WEAVER", "desc": "Order. Open a chain, run it deep, hold it.",
 		"color": Color("e8c840"),
-		"strand": ["signal", "hymn", "chant", "lyse", "hush", "sing", "film", "drone"]},
+		"strand": ["signal", "chant", "hymn", "drone", "lyse", "hush", "needle", "membrane"]},
 }
 
 ## Reward pool available from day 1 (common and early genes).
@@ -400,8 +366,7 @@ const STARTING_POOL := ["lyse", "film", "swarm", "spike", "siphon", "rot", "need
 	"primer", "proofread"]
 ## Genes the bench can sequence into the pool (cost in reagent).
 const SEQUENCEABLE := {"ledger": 3, "tripwire": 3, "pact_coil": 5, "thick_wall": 5,
-	"sporewall": 4, "echo": 4, "crescendo": 5, "fever": 3, "relay": 4, "harmonic": 3,
-	"sing": 4, "silence": 4, "feedback": 4, "shriek": 5}
+	"sporewall": 4, "echo": 4, "crescendo": 5, "fever": 3, "relay": 4, "trace": 4}
 ## Found as sequence sheets in the lab; appended to Game.unlocked when picked up.
 const LAB_FIND := ["cascade", "cyst", "invert", "bloom", "lance", "mirror"]
 const GREEN_POOL := ["g_lash", "g_root", "g_chorus", "g_bloom", "g_weave"]
@@ -415,12 +380,12 @@ const RARITY_WEIGHT := {"common": 60, "uncommon": 28, "rare": 9}
 ## "mimic_last" / "mimic_run"). ARCHIVIST: every `windup_every`-th intent is `windup` instead.
 const T_SPINES := {"id": "spines", "name": "SPINES", "desc": "You take 1 for each damaging gene."}
 const T_HARDENED := {"id": "hardened", "name": "HARDENED", "desc": "Gains 3 Film after each of its turns."}
-const T_LISTENER := {"id": "listener", "name": "LISTENER", "desc": "+3 damage while Chorus is 6+."}
+const T_RIPOSTE := {"id": "riposte", "name": "RIPOSTE", "desc": "Hits you for 3 when your chain SNAPS."}
 const T_SPLIT := {"id": "split", "name": "SPLIT", "desc": "First time under half: gains 12 Film."}
 const T_REGROW := {"id": "regrow", "name": "REGROW", "desc": "Regains 3 at the start of its turn."}
 const T_HOARDER := {"id": "hoarder", "name": "HOARDER", "desc": "+1 damage for each gene you skip."}
-const T_CHOIRMASTER := {"id": "choirmaster", "name": "CHOIRMASTER", "desc": "Heals 8 when it resonates."}
-const T_DEAF := {"id": "deaf", "name": "DEAF", "desc": "Half damage from SING, FEEDBACK, QUORUM."}
+const T_DISCORD := {"id": "discord", "name": "DISCORD", "desc": "Heals 5 when your chain SNAPS."}
+const T_BLANK := {"id": "blank", "name": "BLANK", "desc": "Your chain never HOLDS over END."}
 
 const ENEMIES := {
 	# THE WOUND
@@ -447,9 +412,9 @@ const ENEMIES := {
 			{"id": "w_lash", "name": "LASH 8", "fx": [{"t": "dmg", "n": 8}]},
 			{"id": "w_rake", "name": "RAKE 5x4", "break": 14, "fx": [{"t": "dmg", "n": 5, "k": 4}]}]},
 	# THE RIVERS
-	"pod": {"name": "DRIFT POD", "colony": 40, "blurb": "Calls the Chorus up. Splits.",
+	"pod": {"name": "DRIFT POD", "colony": 40, "blurb": "Severs a link. Splits.",
 		"trait": T_SPLIT, "pattern": [
-			{"id": "r_call", "name": "CALL +2", "fx": [{"t": "chorus", "n": 2}]},
+			{"id": "r_cut", "name": "SEVER+LASH 3", "fx": [{"t": "sever", "n": 1}, {"t": "dmg", "n": 3}]},
 			{"id": "r_burst", "name": "BURST 7", "fx": [{"t": "dmg", "n": 7}]}]},
 	"current": {"name": "CURRENT", "colony": 46, "blurb": "Sweeps NEXT away. Drains.",
 		"pattern": [
@@ -468,35 +433,34 @@ const ENEMIES := {
 			{"id": "r_pull", "name": "PULL 6", "fx": [{"t": "drain", "n": 6}]},
 			{"id": "r_whirl", "name": "WHIRL 4x4", "break": 16, "fx": [{"t": "dmg", "n": 4, "k": 4}]}]},
 	# THE HOLLOW
-	"choir_cell": {"name": "CHOIR CELL", "colony": 42, "blurb": "Hums the Chorus up. Peals loud.",
-		"trait": T_LISTENER, "pattern": [
-			{"id": "h_hum", "name": "HUM +3", "fx": [{"t": "chorus", "n": 3}]},
-			{"id": "h_peal", "name": "PEAL 4/14", "fx": [{"t": "dmg", "n": 4},
-				{"t": "if_chorus", "min": 7, "fx": [{"t": "dmg", "n": 10}]}]}]},
+	"choir_cell": {"name": "SHEAR CELL", "colony": 42, "blurb": "Severs links. Bites on a snap.",
+		"trait": T_RIPOSTE, "pattern": [
+			{"id": "h_shear", "name": "SEVER2+LASH3", "fx": [{"t": "sever", "n": 2}, {"t": "dmg", "n": 3}]},
+			{"id": "h_lash", "name": "LASH 9", "fx": [{"t": "dmg", "n": 9}]}]},
 	"bellows": {"name": "BELLOWS", "colony": 48, "blurb": "Winds up an EXHALE. Break it.",
 		"pattern": [
-			{"id": "h_inhale", "name": "INHALE 8", "fx": [{"t": "film", "n": 8}, {"t": "chorus", "n": 1}]},
+			{"id": "h_inhale", "name": "INHALE 8", "fx": [{"t": "film", "n": 8}]},
 			{"id": "h_exhale", "name": "EXHALE 14", "break": 8, "fx": [{"t": "dmg", "n": 14}]}]},
-	"shroud": {"name": "SHROUD", "colony": 74, "blurb": "Steals Chorus as Film. Knots.",
-		"trait": T_LISTENER, "pattern": [
-			{"id": "h_steal", "name": "STEAL 3", "fx": [{"t": "steal_chorus", "n": 3}]},
+	"shroud": {"name": "SHROUD", "colony": 74, "blurb": "Severs and hides. Knots.",
+		"trait": T_RIPOSTE, "pattern": [
+			{"id": "h_veil", "name": "SEVER 2+FILM", "fx": [{"t": "sever", "n": 2}, {"t": "film", "n": 5}]},
 			{"id": "h_knot", "name": "KNOT 2", "fx": [{"t": "knot", "n": 2}, {"t": "dmg", "n": 3}]},
 			{"id": "h_lash", "name": "LASH 9", "fx": [{"t": "dmg", "n": 9}]},
 			{"id": "h_smother", "name": "SMOTHER 18", "break": 12, "fx": [{"t": "dmg", "n": 18}]}]},
-	"choir": {"name": "THE CHOIR", "colony": 140, "boss": true, "blurb": "Races you to RESONANCE.",
-		"trait": T_CHOIRMASTER, "pattern": [
-			{"id": "h_hum", "name": "HUM +4", "fx": [{"t": "chorus", "n": 4}]},
-			{"id": "h_swell", "name": "SWELL", "fx": [{"t": "dmg_chorus", "mult": 2}]},
-			{"id": "h_tune", "name": "TUNE +2", "fx": [{"t": "grow", "n": 2}, {"t": "chorus", "n": 1}]},
-			{"id": "h_requiem", "name": "REQUIEM 24", "break": 18, "fx": [{"t": "dmg", "n": 24}]}]},
+	"choir": {"name": "THE LUNG", "colony": 140, "boss": true, "blurb": "Cuts your chains. Feeds on snaps.",
+		"trait": T_DISCORD, "pattern": [
+			{"id": "h_shear", "name": "SEVER2+LASH3", "fx": [{"t": "sever", "n": 2}, {"t": "dmg", "n": 3}]},
+			{"id": "h_swell", "name": "SWELL 6x2", "fx": [{"t": "dmg", "n": 6, "k": 2}]},
+			{"id": "h_tune", "name": "SEVER 2+GROW", "fx": [{"t": "sever", "n": 2}, {"t": "grow", "n": 2}]},
+			{"id": "h_requiem", "name": "COLLAPSE 24", "break": 18, "fx": [{"t": "dmg", "n": 24}]}]},
 	# THE ARCHIVE
 	"mimic": {"name": "MIMIC", "colony": 44, "blurb": "Copies the last gene you used.",
 		"pattern": "mimic_last"},
-	"eraser": {"name": "ERASER", "colony": 42, "blurb": "Unsays the Chorus. Gnaws. Deaf.",
-		"trait": T_DEAF, "pattern": [
+	"eraser": {"name": "ERASER", "colony": 42, "blurb": "Unsays links. Gnaws. Blanks holds.",
+		"trait": T_BLANK, "pattern": [
 			{"id": "a_gnaw", "name": "GNAW 2", "fx": [{"t": "gnaw", "n": 2}]},
 			{"id": "a_blot", "name": "BLOT 2", "fx": [{"t": "plant", "n": 2}]},
-			{"id": "a_unsay", "name": "UNSAY", "fx": [{"t": "chorus_set", "n": 0}, {"t": "dmg", "n": 4}]},
+			{"id": "a_unsay", "name": "UNSAY 2+4", "fx": [{"t": "sever", "n": 2}, {"t": "dmg", "n": 4}]},
 			{"id": "a_strike", "name": "STRIKE 6", "fx": [{"t": "dmg", "n": 6}]}]},
 	"palimpsest": {"name": "PALIMPSEST", "colony": 72, "blurb": "Copies you. Grows on your skips.",
 		"trait": T_HOARDER, "pattern": [
@@ -507,7 +471,7 @@ const ENEMIES := {
 	"archivist": {"name": "ARCHIVIST", "colony": 130, "boss": true, "blurb": "Reads your Strand back at you.",
 		"trait": T_SPLIT, "pattern": "mimic_run", "windup_every": 4,
 		"windup": {"id": "a_index", "name": "INDEX 22", "break": 16,
-			"fx": [{"t": "chorus_set", "n": 0}, {"t": "dmg", "n": 22}]}},
+			"fx": [{"t": "dmg", "n": 22}]}},
 	# THE ROOT
 	"tendril": {"name": "ROOT TENDRIL", "colony": 52, "blurb": "Lashes, seeds, drinks. Regrows.",
 		"trait": T_REGROW, "pattern": [
@@ -516,7 +480,7 @@ const ENEMIES := {
 			{"id": "x_drink", "name": "DRINK 5", "fx": [{"t": "drain", "n": 5}]}]},
 	"core": {"name": "THE CORE", "colony": 170, "boss": true, "blurb": "The heart of it. Bind or burn.",
 		"trait": T_SPLIT, "pattern": [
-			{"id": "x_grow", "name": "SPREAD", "fx": [{"t": "grow", "n": 2}, {"t": "chorus", "n": 2}]},
+			{"id": "x_grow", "name": "SPREAD", "fx": [{"t": "grow", "n": 2}]},
 			{"id": "x_lash", "name": "LASH 12", "fx": [{"t": "dmg", "n": 12}]},
 			{"id": "x_seed", "name": "SEED 2", "fx": [{"t": "plant", "n": 2}]},
 			{"id": "x_drink", "name": "DRINK 8", "fx": [{"t": "drain", "n": 8}]},
@@ -541,13 +505,13 @@ const REGION_COLORS := {
 	"root": {"bg": Color("061008"), "fog": Color("0c2810"), "floor": Color("1c3a18"), "accent": Color("70d850")},
 }
 
-## One rule per region (CombatEngine implements the rules). `chorus` is the fight-start base.
+## One rule per region (CombatEngine implements the rules).
 const REGION_MEDIUM := {
-	"wound": {"name": "CLOTTING", "desc": "Film only half-clears each turn.", "chorus": 2},
-	"rivers": {"name": "CURRENT", "desc": "EBB -2 Chorus. SURGE +1 READ, +2 Chorus", "chorus": 3},
-	"hollow": {"name": "BREATH", "desc": "INHALE Film x1.5. EXHALE dmg x1.5.", "chorus": 5},
-	"archive": {"name": "FADING", "desc": "NEXT genes are unreadable until READ.", "chorus": 0},
-	"root": {"name": "THE HEART", "desc": "No decay. Resonance never fades.", "chorus": 6},
+	"wound": {"name": "CLOTTING", "desc": "Film only half-clears each turn."},
+	"rivers": {"name": "CURRENT", "desc": "Every 2nd turn SURGES: +1 READ."},
+	"hollow": {"name": "BREATH", "desc": "INHALE Film x1.5. EXHALE dmg x1.5."},
+	"archive": {"name": "FADING", "desc": "NEXT genes are unreadable until READ."},
+	"root": {"name": "THE HEART", "desc": "Each LINK step adds +2, not +1."},
 }
 
 ## Tissue dropped on a win (the root drops none).
@@ -673,7 +637,7 @@ func _mimic_fx(src: Array) -> Array:
 		var d: Dictionary = e
 		var t: String = String(d.get("t", ""))
 		match t:
-			"free_next", "promote", "charge", "charge_next", "ledger", "tripwire", "fray", "hop", "echo", "splice", "invert", "pull", "lull":
+			"free_next", "promote", "charge", "charge_next", "ledger", "tripwire", "fray", "hop", "echo", "splice", "invert", "pull", "lull", "chain", "trace":
 				fx.append({"t": "film", "n": 3})
 			"clear", "self":
 				pass
@@ -686,20 +650,8 @@ func _mimic_fx(src: Array) -> Array:
 					fx.append({"t": "dmg", "n": int(d.get("per", 4)) * 3})
 			"stagger_dmg":
 				fx.append({"t": "dmg", "n": int(d.get("n", 6))})
-			"sing":
-				fx.append({"t": "dmg_chorus", "mult": int(d.get("per", 2))})
-				fx.append({"t": "chorus_set", "n": 0})
-			"silence":
-				fx.append({"t": "chorus_set", "n": 0})
-				fx.append({"t": "film", "n": 8})
-			"feedback":
-				fx.append({"t": "dmg", "n": int(d.get("per", 2)) * 3})
-			"if_chorus", "if_band":
-				var inner := _mimic_fx(d.get("fx", []))
-				if not inner.is_empty():
-					var nd: Dictionary = d.duplicate()
-					nd["fx"] = inner
-					fx.append(nd)
+			"dmg_count":
+				fx.append({"t": "dmg", "n": int(d.get("per", 4)) * 2})
 			_:
 				fx.append(d)
 	return fx

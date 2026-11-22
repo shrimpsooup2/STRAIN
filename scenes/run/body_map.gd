@@ -403,7 +403,7 @@ func _info_text(r: String) -> String:
 			return "THE ROOT: SEALED\nClear all four regions to reach the centre."
 		var t := "THE ROOT. HEART: %s\nKill it: PURGE. Everything it touched dies.\n" % boss
 		if Game.graft_ready():
-			t += "BIND READY: core at 40% or less, Chorus 10."
+			t += "BIND READY: core at 40% or less, CHAIN x4."
 		else:
 			t += "BIND: not ready."
 		var ml := _medium_line(r)

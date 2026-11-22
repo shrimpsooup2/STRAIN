@@ -33,10 +33,11 @@ const STEPS := {
 		"Build links the strand will not give.",
 		"R MUTATE rerolls a gene. Costs Fray.",
 	],
-	"chorus": [
-		"The Chorus moved. QUIET, HUM, LOUD.",
-		"Some genes change in a band.",
-		"At ten it RESONATES. Doubles a gene.",
+	"order": [
+		"Corner glyph: DEEP or ALONE.",
+		"Chain x3 or longer: DEEP genes change.",
+		"Unlinked: ALONE genes change instead.",
+		"Chain into NEXT before END. It HOLDS.",
 	],
 	"boost": [
 		"F injects a carried booster. Free.",

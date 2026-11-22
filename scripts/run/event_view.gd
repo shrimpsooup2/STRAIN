@@ -158,9 +158,9 @@ static func apply(parent: Node, o: Dictionary) -> void:
 			bl.append(bid)
 			var binfo: Dictionary = Boosters.info(bid)
 			UI.toast("BOOSTER: %s" % String(binfo.get("name", bid.to_upper())), binfo.get("color", UI.C_ACCENT))
-		"pitch":
-			Game.run["pitch"] = int(Game.run.get("pitch", 0)) + n
-			UI.toast("PITCH %+d THIS RUN" % n)
+		"primer":
+			Game.run["primer"] = clampi(int(Game.run.get("primer", 0)) + n, 0, 5)
+			UI.toast("PRIMER %+d THIS RUN" % n)
 		"lab_reagent":
 			Game.reagent = maxi(0, Game.reagent + n)
 			UI.toast("LAB REAGENT %+d" % n)

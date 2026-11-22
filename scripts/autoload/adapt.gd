@@ -10,15 +10,18 @@ extends Node
 ##
 ## Hooks fired by the battle (CombatEngine), see Adapt.hook():
 ##   fight_start, turn_start, turn_end, express, link, clean, skip, splice, mutate,
-##   break, hurt, kill, resonate, shift, inject
+##   break, hurt, kill, inject,
+##   deep (expressed LINKED at chain >= DEEP), lone (expressed unlinked: ALONE),
+##   hold (a chain HOLDS over END), snap (a chain of 2+ SNAPS)
 ##
 ## Mod keys summed by Adapt.mod():
 ##   Battle (doc §1): charge, window, read, splice, band, link_bonus, dmg, film,
-##                    chorus_decay, mut_cost, mut_fray
-##   Battle (doc §9/§15, beyond §1):
-##     pitch       added to fight-start Chorus (before the 0..9 clamp)
-##     quiet_hum   1 = QUIET card modes also fire while Chorus is HUM (cold_read)
-##     loud_hum    1 = LOUD card modes also fire while Chorus is HUM (bellwether)
+##                    mut_cost, mut_fray
+##   Order:
+##     deep_early  DEEP starts this many steps earlier (min x2)
+##     reach       every gene LINKs across this many extra slots (like BRIDGE)
+##     hold_bonus  a HELD chain resumes this many steps longer
+##     third       1 = the 3rd gene expressed each turn fires twice
 ##   Run layer: reward_choices (extra reward picks), rest_heal (%), shop_discount
 ##
 ## Every function is safe in the lab (Game.run empty): it returns empty / zero.
@@ -30,10 +33,8 @@ const DATA := {
 		"hooks": {"fight_start": {"fx": [{"t": "film", "n": 6}], "limit": ""}},
 		"icon": [".......", ".#####.", "#.....#", "#.###.#", "#.....#", ".#####.", "......."]},
 	"quorum_sense": {"name": "QUORUM SENSE", "rarity": "common",
-		"desc": "Fights start 2 Chorus louder. Chorus turning LOUD: +1 Charge.",
-		"mods": {"pitch": 2},
-		"hooks": {"shift": {"fx": [{"t": "if_band", "band": "loud",
-			"fx": [{"t": "charge", "n": 1}]}], "limit": ""}},
+		"desc": "First DEEP gene each turn: +1 Charge.",
+		"hooks": {"deep": {"fx": [{"t": "charge", "n": 1}], "limit": "turn"}},
 		"icon": [".#...#.", "#.#.#.#", ".#...#.", "...#...", "..#.#..", "...#...", "......."]},
 	"steady_hand": {"name": "STEADY HAND", "rarity": "common",
 		"desc": "CLEAN band +12% wider. Each CLEAN read: +2 Film.",
@@ -76,25 +77,25 @@ const DATA := {
 		"hooks": {"skip": {"fx": [{"t": "film", "n": 2}], "limit": ""}},
 		"icon": [".......", "#.....#", "#.....#", "#..#..#", "#.....#", ".#####.", "......."]},
 	"echo_chamber": {"name": "ECHO CHAMBER", "rarity": "common",
-		"desc": "Each CLEAN read: Chorus +1.",
-		"hooks": {"clean": {"fx": [{"t": "chorus", "n": 1}], "limit": ""}},
+		"desc": "Each time a chain HOLDS over END: +5 Film.",
+		"hooks": {"hold": {"fx": [{"t": "film", "n": 5}], "limit": ""}},
 		"icon": ["#######", "#.....#", "#.###.#", "#.#.#.#", "#.###.#", "#.....#", "#######"]},
-	"tuning_fork": {"name": "TUNING FORK", "rarity": "common",
-		"desc": "Whenever Chorus changes band, deal 4.",
-		"hooks": {"shift": {"fx": [{"t": "dmg", "n": 4}], "limit": ""}},
-		"icon": [".#...#.", ".#...#.", ".#...#.", ".#####.", "...#...", "...#...", "...#..."]},
-	"choir_leash": {"name": "CHOIR LEASH", "rarity": "rare",
-		"desc": "When you RESONATE, gain 8 Film.",
-		"hooks": {"resonate": {"fx": [{"t": "film", "n": 8}], "limit": ""}},
-		"icon": [".#####.", "#.....#", "#.....#", ".#####.", "...#...", "...#...", "..###.."]},
+	"whiplash": {"name": "WHIPLASH", "rarity": "common",
+		"desc": "When your chain SNAPS, deal 6.",
+		"hooks": {"snap": {"fx": [{"t": "dmg", "n": 6}], "limit": ""}},
+		"icon": ["#......", ".#.....", "..#....", "...#...", "...#.#.", "....#.#", "......#"]},
+	"tendon": {"name": "TENDON", "rarity": "rare",
+		"desc": "A HELD chain resumes 2 steps longer.",
+		"mods": {"hold_bonus": 2},
+		"icon": ["..###..", ".#...#.", ".#...#.", "..#.#..", ".#...#.", ".#...#.", "..###.."]},
 	"rot_sac": {"name": "ROT SAC", "rarity": "common",
 		"desc": "Fights start with ROT 2 on the enemy for 4 turns.",
 		"hooks": {"fight_start": {"fx": [{"t": "rot", "n": 2, "turns": 4}], "limit": ""}},
 		"icon": ["..#.#..", ".#####.", "##.#.##", "#######", "##.#.##", ".#####.", "..#.#.."]},
-	"cold_read": {"name": "COLD READ", "rarity": "rare",
-		"desc": "QUIET modes also trigger while Chorus is HUM.",
-		"mods": {"quiet_hum": 1},
-		"icon": ["#..#..#", ".#.#.#.", "..###..", "#######", "..###..", ".#.#.#.", "#..#..#"]},
+	"triple_helix": {"name": "TRIPLE HELIX", "rarity": "rare",
+		"desc": "The 3rd gene you express each turn fires twice.",
+		"mods": {"third": 1},
+		"icon": ["#.#.#.#", ".#.#.#.", "#.#.#.#", ".......", "#.#.#.#", ".#.#.#.", "#.#.#.#"]},
 	# ------------------------------------------------------------ common
 	"burr": {"name": "BURR", "rarity": "common",
 		"desc": "Each LINK also deals 2.",
@@ -113,11 +114,10 @@ const DATA := {
 		"desc": "First MUTATE each turn refunds 1 Charge.",
 		"hooks": {"mutate": {"fx": [{"t": "charge", "n": 1}], "limit": "turn"}},
 		"icon": ["..###..", ".#####.", ".#####.", ".......", "#######", "#######", ".#####."]},
-	"lullaby_gland": {"name": "LULLABY GLAND", "rarity": "common",
-		"desc": "End a turn while QUIET: gain 5 Film.",
-		"hooks": {"turn_end": {"fx": [{"t": "if_band", "band": "quiet",
-			"fx": [{"t": "film", "n": 5}]}], "limit": ""}},
-		"icon": ["..###..", ".##....", "##.....", "##.....", "##.....", ".##....", "..###.."]},
+	"cyst_wall": {"name": "CYST WALL", "rarity": "common",
+		"desc": "Each gene expressed ALONE (unlinked) gives 3 Film.",
+		"hooks": {"lone": {"fx": [{"t": "film", "n": 3}], "limit": ""}},
+		"icon": ["..###..", ".#...#.", "#.....#", "#..#..#", "#.....#", ".#...#.", "..###.."]},
 	"adrenal_node": {"name": "ADRENAL NODE", "rarity": "common",
 		"desc": "First time you lose Colony each turn: +1 Charge next turn.",
 		"hooks": {"hurt": {"fx": [{"t": "charge_next", "n": 1}], "limit": "turn"}},
@@ -128,8 +128,8 @@ const DATA := {
 		"icon": [".....##", "....###", "...###.", "..###..", ".###...", ".#.....", "#......"]},
 	# ------------------------------------------------------------ rare
 	"hive_mind": {"name": "HIVE MIND", "rarity": "rare",
-		"desc": "Chorus no longer decays at the start of your turn.",
-		"mods": {"chorus_decay": -1},
+		"desc": "DEEP starts at chain x2 instead of x3.",
+		"mods": {"deep_early": 1},
 		"icon": [".##.##.", "#..#..#", ".##.##.", "#..#..#", ".##.##.", "#..#..#", ".##.##."]},
 	"phage_memory": {"name": "PHAGE MEMORY", "rarity": "rare",
 		"desc": "Every reward offers 1 more choice.",
@@ -143,10 +143,10 @@ const DATA := {
 		"desc": "First CLEAN read each turn: +1 Charge.",
 		"hooks": {"clean": {"fx": [{"t": "charge", "n": 1}], "limit": "turn"}},
 		"icon": ["###....", "#.#....", "###....", ".......", "....###", "....#.#", "....###"]},
-	"bellwether": {"name": "BELLWETHER", "rarity": "rare",
-		"desc": "LOUD modes also trigger while Chorus is HUM.",
-		"mods": {"loud_hum": 1},
-		"icon": ["...#...", "..###..", ".#####.", ".#####.", ".#####.", "#######", "...#..."]},
+	"saltatory": {"name": "SALTATORY", "rarity": "rare",
+		"desc": "Any gene can LINK across a 1-slot gap.",
+		"mods": {"reach": 1},
+		"icon": ["#......", "##.....", ".#.#...", "..###..", "...#.#.", ".....##", "......#"]},
 	# ------------------------------------------------------------ cursed
 	"blind_spot": {"name": "BLIND SPOT", "rarity": "cursed",
 		"desc": "+1 Charge every turn. Window is 1 slot smaller.",
@@ -157,9 +157,9 @@ const DATA := {
 		"mods": {"dmg": 2, "band": -10},
 		"icon": ["...#...", "..##...", "..###..", ".#####.", ".##.##.", ".#...#.", "..###.."]},
 	"green_thread": {"name": "GREEN THREAD", "rarity": "cursed",
-		"desc": "Each turn starts with Chorus +1. +1 UPTAKE on pickup.",
+		"desc": "+1 UPTAKE on pickup. When your chain SNAPS, lose 2 Colony.",
 		"gain": {"uptake": 1},
-		"hooks": {"turn_start": {"fx": [{"t": "chorus", "n": 1}], "limit": ""}},
+		"hooks": {"snap": {"fx": [{"t": "self", "n": 2}], "limit": ""}},
 		"icon": ["#......", ".#.....", "..#...#", "...#.#.", "....#..", "...#...", "..#...."]},
 	"metabolic_surge": {"name": "SURGE GLAND", "rarity": "cursed",
 		"desc": "+1 Charge every turn. +2 FRAY on pickup.",
@@ -184,10 +184,10 @@ const CRAFT := {
 	"plasma_reserve": {"plasma": 2},
 	"dormant_pocket": {"plasma": 2, "myelin": 1},
 	"echo_chamber": {"alveoli": 2},
-	"tuning_fork": {"alveoli": 2, "myelin": 1},
-	"choir_leash": {"alveoli": 3},
+	"whiplash": {"alveoli": 2, "myelin": 1},
+	"tendon": {"alveoli": 3},
 	"rot_sac": {"myelin": 2},
-	"cold_read": {"myelin": 3},
+	"triple_helix": {"myelin": 3},
 }
 
 const _BLANK_ICON := ["#######", "#.....#", "#.###.#", "#...#.#", "#..#..#", "#.....#", "###.###"]

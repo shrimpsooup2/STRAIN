@@ -7,14 +7,15 @@ extends Node
 ##   "pour"     arg = material spent, to = station it pours into
 ##   "grow"     arg = adaptation id          "equip" / "unequip"  arg = id
 ##   "booster"  arg = booster id drawn up    "empty"  arg = booster id
-##   "pitch"    arg = new pitch              "strain" arg = strain id
+##   "primer"   arg = new primer             "strain" arg = strain id
 ##   "ring"     strand reordered / banked    "enrich" arg = new gene id
 ##   "sequence" arg = gene id
 
 const Boosters := preload("res://scripts/culture/boosters.gd")
 const Tissue := preload("res://scripts/culture/tissue.gd")
 
-const PITCH_MAX := 6
+const PRIMER_MAX := 3
+const PRIMER_COST := 3     ## Colony per primer step, paid at each fight start
 const ENRICH_COST := 2
 
 signal changed(kind: String, arg: String, to: String)
@@ -74,13 +75,10 @@ func _pour(cost: Dictionary, to: String) -> void:
 		changed.emit("pour", String(m), to)
 
 
-func pitch_text(p: int) -> String:
-	var t := "PITCH %d. Fights start %d Chorus louder." % [p, p]
+func primer_text(p: int) -> String:
 	if p == 0:
-		t = "PITCH 0. Fights start at their own pitch."
-	if p > 3:
-		t += " LOUD fights feed the infection."
-	return t
+		return "PRIMER 0. Fights start cold: no chain."
+	return "PRIMER %d. My first gene opens at CHAIN x%d, never ALONE. -%d Colony each fight." % [p, p, p * PRIMER_COST]
 
 
 # ------------------------------------------------------------ vial rack
@@ -428,14 +426,16 @@ func tray() -> void:
 		await UI.say(["%s DRAWN UP. It goes in with me." % String(d["name"])])
 
 
-# ------------------------------------------------------------ tuning fork
+# ------------------------------------------------------------ primer
 
-func tune() -> void:
+## A primer is where a strand starts copying: each step means the fight's
+## first gene resumes a HELD chain one longer. Paid in Colony every fight.
+func prime() -> void:
 	while true:
-		var p: int = int(Game.culture.get("pitch", 0))
-		var opts: Array = [{"text": "RAISE", "disabled": p >= PITCH_MAX},
-			{"text": "LOWER", "disabled": p <= 0}, "DONE"]
-		var i := await UI.choose(opts, pitch_text(p))
+		var p: int = int(Game.culture.get("primer", 0))
+		var opts: Array = [{"text": "LENGTHEN", "disabled": p >= PRIMER_MAX},
+			{"text": "SHORTEN", "disabled": p <= 0}, "DONE"]
+		var i := await UI.choose(opts, primer_text(p))
 		match i:
 			0:
 				p += 1
@@ -443,9 +443,9 @@ func tune() -> void:
 				p -= 1
 			_:
 				return
-		Game.culture["pitch"] = clampi(p, 0, PITCH_MAX)
+		Game.culture["primer"] = clampi(p, 0, PRIMER_MAX)
 		sfx("select", 0.8 + p * 0.1)
-		_save("pitch", str(p))
+		_save("primer", str(p))
 
 
 # ------------------------------------------------------------ inject

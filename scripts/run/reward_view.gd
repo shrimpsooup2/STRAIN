@@ -67,7 +67,7 @@ static func link_text(id: String) -> String:
 	if at < 0:
 		return ""
 	var seg := desc.substr(at)
-	for kw in [" LOUD:", " QUIET:", " FIRST:", " DORMANT:"]:
+	for kw in [" DEEP:", " ALONE:", " FIRST:", " DORMANT:"]:
 		var cut := seg.find(kw)
 		if cut > 0:
 			seg = seg.left(cut)

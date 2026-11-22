@@ -1,8 +1,8 @@
 extends Control
 ## One gene tile in the Reader window, or a plain caption button (END / MUT / SHOT).
 ## Drawn by hand so it stays crisp at 384x216.
-## Tile states: spent, marked (teeth / knot), knotted (+1 cost), faded "???",
-## SKIP ghost, lit mode glyph (LOUD / QUIET), link target arrow, READ/NEXT zone.
+## Tile states: spent, marked (teeth / knot / sever), knotted (+1 cost), faded "???",
+## SKIP ghost, lit mode glyph (DEEP / ALONE), link target arrow (double when HELD), READ/NEXT zone.
 
 signal pressed
 signal hovered
@@ -17,12 +17,13 @@ var spent := false
 var affordable := true
 var cost_now := -1      ## shown cost (-1 = card cost)
 var tag := ""           ## overrides the bottom line
-var marked := ""        ## "" | "gnaw" | "knot" — enemy intends to eat / knot this
+var marked := ""        ## "" | "gnaw" | "knot" | "sever" — enemy intends to eat / knot / cut this
 var knotted := false    ## knotted this turn: costs +1
 var faded := false      ## FADING medium: shows "???"
 var ghost := ""         ## overlay word while animating out ("SKIP")
-var mode := ""          ## "" | "loud" | "quiet" — lit mode glyph
+var mode := ""          ## "" | "deep" | "lone" — lit mode glyph
 var link_target := false ## expressing this would LINK
+var held := false       ## the link target is a HELD chain from last turn
 var next_zone := false  ## tile sits in the NEXT zone (dimmer)
 var pulse := 0.0        ## 0..1 highlight pulse (set by the battle each frame)
 
@@ -57,6 +58,7 @@ func set_state(st: Dictionary) -> void:
 	faded = bool(st.get("faded", false))
 	mode = String(st.get("mode", ""))
 	link_target = bool(st.get("link", false))
+	held = bool(st.get("held", false))
 	next_zone = bool(st.get("next", false))
 	ghost = String(st.get("ghost", ""))
 	queue_redraw()
@@ -116,7 +118,7 @@ func _draw() -> void:
 	if green:
 		bd = UI.C_GREEN
 	if link_target and not spent:
-		bd = GeneArt.C_CHORUS.lerp(UI.C_PAPER, pulse * 0.5)
+		bd = GeneArt.C_ORDER.lerp(UI.C_PAPER, pulse * 0.5)
 	if selected:
 		bd = UI.C_ACCENT if not green else UI.C_GREEN.lightened(0.3)
 	var bw := 2 if (selected or green or (link_target and not spent)) else 1
@@ -157,10 +159,10 @@ func _draw() -> void:
 		bottom = "SPENT"
 	var bc := ink if not spent else Color("303438")
 	_fit_text(lift + Vector2(2, size.y - 12), bottom, bc, size.x - 4)
-	# Mode glyph (top-right), lit when the band matches.
+	# Mode glyph (top-right): the mode this gene would fire in right now.
 	if mode != "" and not (faded and not spent):
-		var g: Array = GeneArt.GLYPH_LOUD if mode == "loud" else GeneArt.GLYPH_QUIET
-		GeneArt.bitmap(self, lift + Vector2(size.x - 10, 5), g, GeneArt.C_CHORUS if mode == "loud" else Color("80a8e8"), 1)
+		var g: Array = GeneArt.GLYPH_DEEP if mode == "deep" else GeneArt.GLYPH_LONE
+		GeneArt.bitmap(self, lift + Vector2(size.x - 10, 5), g, GeneArt.C_ORDER if mode == "deep" else Color("80a8e8"), 1)
 	# Enemy marks (top-left).
 	if marked == "gnaw":
 		GeneArt.bitmap(self, lift + Vector2(3, 5), GeneArt.GLYPH_TEETH, UI.C_BAD, 1)
@@ -168,14 +170,19 @@ func _draw() -> void:
 	elif marked == "knot":
 		GeneArt.bitmap(self, lift + Vector2(3, 5), GeneArt.GLYPH_KNOT, Color("b070e0"), 1)
 		draw_rect(Rect2(lift, size), Color(0.69, 0.44, 0.88, 0.1 + 0.1 * pulse))
+	elif marked == "sever":
+		GeneArt.bitmap(self, lift + Vector2(3, 5), GeneArt.GLYPH_SEVER, GeneArt.C_SEVER, 1)
+		draw_rect(Rect2(lift, size), Color(GeneArt.C_SEVER, 0.1 + 0.1 * pulse))
 	if knotted and not spent:
 		GeneArt.bitmap(self, lift + Vector2(3, size.y - 20), GeneArt.GLYPH_KNOT, Color("b070e0"), 1)
-	# Link arrow: a small chevron on the left edge.
+	# Link arrow: a small chevron on the left edge (two when it resumes a HELD chain).
 	if link_target and not spent:
 		var ax := lift.x - 1.0
 		var ay := lift.y + size.y / 2.0
-		var ac := GeneArt.C_CHORUS
+		var ac := GeneArt.C_ORDER
 		draw_colored_polygon(PackedVector2Array([Vector2(ax - 3, ay - 4), Vector2(ax + 2, ay), Vector2(ax - 3, ay + 4)]), ac)
+		if held:
+			draw_colored_polygon(PackedVector2Array([Vector2(ax - 3, ay - 13), Vector2(ax + 2, ay - 9), Vector2(ax - 3, ay - 5)]), ac)
 	if ghost != "":
 		draw_rect(Rect2(lift, size), Color(0.02, 0.03, 0.04, 0.55))
 		_fit_text(lift + Vector2(2, roundf(size.y / 2.0 - 4)), ghost, UI.C_BAD.lightened(0.2), size.x - 4)

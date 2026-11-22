@@ -4,13 +4,14 @@ extends RefCounted
 const C_DMG := Color("e06048")
 const C_FILM := Color("58a8e8")
 const C_HEAL := Color("e888b0")
-const C_CHORUS := Color("e8c840")
+const C_ORDER := Color("e8c840")   ## genes that care where they sit (LINK / DEEP / ALONE / REACH)
+const C_SEVER := Color("d05050")
 const C_UTIL := Color("b0b8c8")
 const C_PASSIVE := Color("9888c0")
 const C_JUNK := Color("6a7a30")
 
 
-## Gene category by base id: "dmg" | "film" | "heal" | "chorus" | "util" | "passive" | "junk".
+## Gene category by base id: "dmg" | "film" | "heal" | "order" | "util" | "passive" | "junk".
 const CAT := {
 	"lyse": "dmg", "swarm": "dmg", "spike": "dmg", "siphon": "dmg", "rot": "dmg",
 	"needle": "dmg", "lance": "dmg", "cascade": "dmg", "fever": "dmg", "bloom": "dmg",
@@ -18,15 +19,14 @@ const CAT := {
 	"film": "film", "membrane": "film", "sporewall": "film", "clot": "film", "cyst": "film",
 	"mirror": "film", "terminator": "film",
 	"divide": "heal",
-	"signal": "chorus", "harmonic": "chorus", "hymn": "chorus", "sing": "chorus",
-	"drone": "chorus", "chant": "chorus", "silence": "chorus", "whisper": "chorus",
-	"shriek": "chorus", "lullaby": "chorus", "feedback": "chorus", "hush": "chorus",
-	"quorum": "chorus", "crescendo": "chorus",
+	"signal": "order", "hymn": "order", "drone": "order", "chant": "order",
+	"whisper": "order", "lullaby": "order", "hush": "order", "quorum": "order",
+	"crescendo": "order",
 	"promoter": "util", "catalyst": "util", "splicer": "util", "invert": "util",
 	"pull": "util", "spore": "util", "primer": "util", "echo": "util", "proofread": "util",
 	"ledger": "util", "tripwire": "util", "relay": "util",
 	"pact_coil": "passive", "thick_wall": "passive",
-	"g_lash": "dmg", "g_root": "film", "g_chorus": "chorus", "g_bloom": "heal", "g_weave": "util",
+	"g_lash": "dmg", "g_root": "film", "g_chorus": "order", "g_bloom": "heal", "g_weave": "util",
 	"overgrowth": "junk", "scab_plate": "junk",
 }
 
@@ -46,14 +46,14 @@ static func gene_cat(id: String) -> String:
 		return "util"
 	var first: Dictionary = fx[0]
 	match String(first.get("t", "")):
-		"dmg", "dmg_chorus", "drain", "drifter", "rot", "stagger_dmg":
+		"dmg", "drain", "drifter", "rot", "stagger_dmg", "latent":
 			return "dmg"
 		"film":
 			return "film"
 		"heal":
 			return "heal"
-		"chorus", "if_chorus", "sing", "silence", "feedback", "lull":
-			return "chorus"
+		"chain", "dmg_count", "prime":
+			return "order"
 	return "util"
 
 
@@ -65,8 +65,8 @@ static func cat_color(cat: String) -> Color:
 			return C_FILM
 		"heal":
 			return C_HEAL
-		"chorus":
-			return C_CHORUS
+		"order":
+			return C_ORDER
 		"passive":
 			return C_PASSIVE
 		"junk":
@@ -81,8 +81,9 @@ static func gene_color(id: String) -> Color:
 
 
 ## 7x7 glyphs for gene modes / enemy marks, drawn with bitmap().
-const GLYPH_LOUD := ["...#...", "..##.#.", "####..#", "####..#", "####..#", "..##.#.", "...#..."]
-const GLYPH_QUIET := ["...#...", "..##...", "####...", "####.#.", "####...", "..##...", "...#..."]
+const GLYPH_DEEP := ["#.....#", ".#...#.", "..#.#..", "#..#..#", ".#...#.", "..#.#..", "...#..."]
+const GLYPH_LONE := ["..###..", ".#...#.", "#.....#", "#..#..#", "#.....#", ".#...#.", "..###.."]
+const GLYPH_SEVER := ["......#", ".....#.", "###.#..", "...#...", "..#.###", ".#.....", "#......"]
 const GLYPH_TEETH := ["#######", "#.#.#.#", ".......", ".......", ".......", "#.#.#.#", "#######"]
 const GLYPH_KNOT := ["#.....#", "##...##", "###.###", "...#...", "###.###", "##...##", "#.....#"]
 

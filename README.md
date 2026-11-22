@@ -55,7 +55,7 @@ You can also open this folder in Godot 4.4 and press F5.
 | Incubator | Grow traits from tissue, then equip them. |
 | Strain stock | Pick the strain for this run. |
 | Syringe tray | Pick the boosters you carry (two). |
-| Tuning fork | Set the Chorus each fight starts on. |
+| Primer | Each fight opens on a HELD chain (x1-x3). Costs 3 Colony per step, every fight. |
 | Injector | Go in. |
 | Door | Back to the lab. |
 
@@ -74,20 +74,35 @@ Each region has its own rule (its medium) and gives something back when cleared:
 | Region | Medium | Reward |
 |---|---|---|
 | The Wound | Clotting: Film only half-clears each turn | Steady hands, so bench work costs less |
-| The Rivers | Current: Chorus ebbs and surges | Slows the clock |
-| The Hollow | Breath: inhale and exhale turns | +1 BREATH; the first clear unlocks the CANTOR strain |
+| The Rivers | Current: every 2nd turn surges, READ +1 | Slows the clock |
+| The Hollow | Breath: inhale and exhale turns | +1 BREATH; the first clear unlocks the WEAVER strain |
 | The Archive | Fading: upcoming genes are unreadable until read | Memories |
-| The Root | The Heart: no decay | — |
+| The Root | The Heart: each LINK step adds +2, not +1 | — |
 
 Run nodes: fight, elite, rest, event, lesion, cyst, needle and boss.
 
 ## The cards
 
-1. **Your deck is a Strand.** It's an ordered loop that never gets shuffled. The Reader shows the next 4 genes, and you have 3 Charge to express them. The Reader then moves on 4, so the order you arrange is your strategy.
+1. **Your deck is a Strand.** It's an ordered loop that never gets shuffled. The Reader shows the next 5 genes: 3 READ, 2 NEXT. At END the READ zone leaves and NEXT slides in, so the order you arrange is your strategy.
 2. **Colony is your health.** It carries over between fights in a run.
-3. **Chorus is a shared 0-10 track.** It is QUIET at 0-3, HUM at 4-6 and LOUD at 7-10. Many genes change in a given band, whichever side pushed the Chorus there.
+3. **Order is the whole game.** Each effect cares where a gene sits and when it fires:
 
-Keywords come in one at a time: Drifter, Hopper, Ledger, Tripwire, Pact, Fray, and Green genes. Green genes are strong, but every one you express speeds up the real infection.
+| Rule | What it does | Why it's there |
+|---|---|---|
+| LINK / CHAIN | Express the gene right of your last: +1 to its numbers per step. | The base reward for building the Strand in sequence. |
+| DEEP | A DEEP gene expressed at CHAIN x3+ swaps to its DEEP text. | Pays off long sequences; you build toward it. |
+| ALONE | An ALONE gene expressed unlinked swaps to its ALONE text. | Gives a reason to break order on purpose. |
+| HOLD | END a chain whose next gene sits in NEXT: the chain survives into next turn. | Turns the READ/NEXT split into planning across turns. |
+| SNAP | Break a chain of x2+ out of order: it SNAPS. Some hosts punish that. | Makes breaking order cost something. |
+| REACH | BRIDGE (and SALTATORY) link across a one-slot gap. | Gets around a dead slot without a splice. |
+| TRACE | Copies the base effect of the gene on its left. | Its value depends entirely on its neighbour. |
+| QUORUM | Deals 4 per gene already expressed this turn. | Rewards playing it late in the turn. |
+| SEVER | A host cuts a slot so it cannot LINK. SUTURE clears it. | Hosts attack your order, not just your Colony. |
+| PRIMER | Bench setting: the fight's first gene starts HELD at xN. | Buys early DEEP access; that first gene gives up ALONE. |
+
+Boosters: LIGASE adds CHAIN +2 (or primes the opener if nothing has fired yet); SUTURE clears SEVER, GNAW and KNOT marks. Adaptations hook the same rules: WHIPLASH (deal 6 on SNAP), TENDON (HELD chains resume 2 longer), TRIPLE HELIX (3rd gene fires twice), HIVE MIND (DEEP at x2), ECHO CHAMBER (Film on HOLD), CYST WALL (Film on ALONE), SALTATORY (everything has REACH). BIND, the third ending's lock, needs the core at 40% or less and CHAIN x4, three turns running.
+
+Other keywords come in one at a time: Drifter, Hopper, Ledger, Tripwire, Pact, Latent, Fray, and Green genes. Green genes are strong, but every one you express speeds up the real infection.
 
 ## The clock
 

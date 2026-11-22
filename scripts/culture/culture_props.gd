@@ -179,18 +179,19 @@ static func trait_jar(color: Color, equipped: bool) -> Node3D:
 	return root
 
 
-## Tuning fork on a block. "Prongs" wobbles; "Pips" shows the pitch.
-static func fork() -> Node3D:
+## Primer: a short ladder of strand on a block. "Strand" twitches; "Pips" shows the primer.
+static func primer() -> Node3D:
 	var root := Node3D.new()
 	root.add_child(Retro.box(Vector3(0.7, 0.12, 0.42), Color("3a4248"), Vector3(0, 0.06, 0)))
-	root.add_child(Retro.cyl(0.035, 0.035, 0.36, Color("b8c0c8"), 6, Vector3(0, 0.3, -0.06)))
-	var prongs := Node3D.new()
-	prongs.name = "Prongs"
-	prongs.position = Vector3(0, 0.48, -0.06)
-	prongs.add_child(Retro.box(Vector3(0.3, 0.05, 0.05), Color("c8d0d8"), Vector3(0, 0.0, 0)))
-	prongs.add_child(Retro.box(Vector3(0.05, 0.55, 0.05), Color("c8d0d8"), Vector3(-0.13, 0.28, 0)))
-	prongs.add_child(Retro.box(Vector3(0.05, 0.55, 0.05), Color("c8d0d8"), Vector3(0.13, 0.28, 0)))
-	root.add_child(prongs)
+	var strand := Node3D.new()
+	strand.name = "Strand"
+	strand.position = Vector3(0, 0.12, -0.06)
+	for side: float in [-1.0, 1.0]:
+		strand.add_child(Retro.box(Vector3(0.05, 0.8, 0.05), Color("c8d0d8"), Vector3(0.12 * side, 0.4, 0)))
+	for k in 5:
+		var col := Color("e8c840") if k % 2 == 0 else Color("6fa8dc")
+		strand.add_child(Retro.box(Vector3(0.19, 0.04, 0.04), col, Vector3(0, 0.1 + k * 0.15, 0)))
+	root.add_child(strand)
 	var pips := Node3D.new()
 	pips.name = "Pips"
 	root.add_child(pips)

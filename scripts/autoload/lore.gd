@@ -48,8 +48,8 @@ const ENTRIES := {
 		"more": [
 			{"min_day": 3, "see": ["Bottom corner, fresh marker. The cap is off:", "COUNT THE HOOKS."],
 				"think": "That wasn't there yesterday."},
-			{"min_day": 6, "see": ["Smaller, under it:", "IT ONLY LIVES WHERE IT'S LOUD."],
-				"think": "Loud?"},
+			{"min_day": 6, "see": ["Smaller, under it:", "IT ONLY LIVES WHERE THINGS MOVE IN STEP."],
+				"think": "In step?"},
 			{"min_day": 9, "see": ["Along the frame:", "SHE CAN'T HEAR YOU. STOP CALLING."],
 				"think": "I haven't called anyone."},
 			{"min_day": 12, "requires": {"lore": "protocol"},
@@ -149,7 +149,7 @@ const ENTRIES := {
 		"see": ["MSG 4. RECEIVED 03:20. 0:58.",
 			"\"Hi, it's me.\"  [4 SECONDS]  \"Hi, it's me.\"",
 			"\"It's warm here. The ground's warm. We're all lying down in the north field.\"",
-			"\"It's so loud here. You'd like it. Come home and lie down.\""],
+			"\"Everything moves together here. You'd like it. Come home and lie down.\""],
 		"think": "That's not her."},
 	# --- CCTV. The lockdown file opens at stage 3 or an archive clear. -------
 	"cctv": {"title": "CCTV 03:12", "depth": "deep", "min_stage": 3, "needs": {"cleared": "archive"},
@@ -207,8 +207,8 @@ const ENTRIES := {
 		"see": ["Another:", "Don't tie it to us. Tie it to something only living ground makes."],
 		"think": ""},
 	"page_3": {"title": "NOTEBOOK PAGE III", "depth": "deepest", "hand": true, "page": "3",
-		"see": ["The last:", "Living soil is loud. A body is quiet.",
-			"If it can only live where the Chorus is loud..."],
+		"see": ["The last:", "Living soil moves in one order. A body keeps its own.",
+			"If it can only live where everything is in step..."],
 		"think": "Then it can't live in me."},
 	# --- Stated once, in your own hand. Shown at the test bed (or by an ending).
 	"truth": {"title": "IN YOUR HAND", "depth": "deepest",

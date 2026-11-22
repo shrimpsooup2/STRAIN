@@ -1,7 +1,7 @@
 extends Node3D
 ## Combat v2. The Reader shows a WINDOW of genes: READ zone (left) leaves at END,
 ## NEXT zone (right) slides in. LINK adjacent slots, CLEAN the read bar, SPLICE,
-## MUTATE, inject BOOSTERS, BREAK wind-ups, ride the CHORUS. See strain_design §1, §9-§12.
+## MUTATE, inject BOOSTERS, BREAK wind-ups, HOLD a chain over END. See strain_design §1, §9-§12.
 
 const GeneArt := preload("res://scripts/run/gene_art.gd")
 const PixelBar := preload("res://scripts/run/pixel_bar.gd")
@@ -13,6 +13,7 @@ const ReadBar := preload("res://scripts/battle/read_bar.gd")
 const MutateReel := preload("res://scripts/battle/mutate_reel.gd")
 const Tutorial := preload("res://scripts/battle/tutorial.gd")
 const Boosters := preload("res://scripts/culture/boosters.gd")
+const BenchOps := preload("res://scripts/culture/bench_ops.gd")
 const JUICE_PATH := "res://scripts/fx/juice.gd"
 const GLOSSARY_PATH := "res://scripts/ui/glossary.gd"
 const CREATURES_PATH := "res://scripts/battle/creatures/creatures.gd"
@@ -24,7 +25,7 @@ const CAM_LOOK := Vector3(4.2, -0.5, -6.0)
 
 const ENEMY_BOX := Rect2(4, 4, 176, 40)
 const INTENT_BOX := Rect2(4, 46, 168, 26)
-const CHORUS_BOX := Rect2(200, 4, 182, 28)
+const ORDER_BOX := Rect2(200, 4, 182, 28)
 const ICON_Y := 34
 const PLAYER_BOX := Rect2(206, 94, 176, 26)
 const HINT_Y := 122
@@ -37,15 +38,13 @@ const BTN_X := 330
 const BTN_W := 52
 const HINT := "Z EXPRESS Q SPLICE R MUT E END F SHOT H ?"
 const ROT_COL := Color("c8d060")
-const C_QUIET := Color("4060a0")
-const C_HUM := Color("8890a0")
-const C_LOUD := Color("e8c840")
+const C_HI := Color("e8c840")
+const C_SEVER := Color("d05050")
 
 ## Keys that take LINK/GROWS bonuses and the CLEAN multiplier, per fx type.
 const NUM_KEYS := {"dmg": ["n"], "film": ["n"], "heal": ["n"], "drain": ["n"], "stagger_dmg": ["n"],
-	"rot": ["n"], "cap": ["per"], "sing": ["per"], "silence": ["per"], "feedback": ["per"],
-	"drifter": ["burst", "latent"], "lull": ["n"], "steal_chorus": ["n"]}
-const DAMAGING := ["dmg", "drain", "stagger_dmg", "sing", "feedback", "dmg_chorus", "drifter", "cap"]
+	"rot": ["n"], "cap": ["per"], "dmg_count": ["per"], "latent": ["n"], "lull": ["n"]}
+const DAMAGING := ["dmg", "drain", "stagger_dmg", "dmg_count", "latent", "cap"]
 
 # ------------------------------------------------------------------ fight state
 var region := "wound"
@@ -65,12 +64,11 @@ var chain := 0
 var last_slot := -1
 var exp_count := 0
 var promote_from := -1
-var chorus := 0
-var feedback_total := 0
+var best_chain := 0           ## longest chain reached this turn (BIND)
+var carry_uid := -1           ## HOLD: the unspent gene right of the last expressed one at END
+var carry_chain := 0          ## HOLD: chain it may continue next turn
+var primer := 0               ## PRIMER (bench): fight-start HELD chain, consumed turn 1
 var lull := 0
-var lull_chorus := false
-var resonant_p := false
-var resonant_e := false
 var trap := 0
 var last_fx: Array = []
 var last_gene := ""
@@ -102,7 +100,7 @@ var _hook_turn: Dictionary = {}
 var _hook_fight: Dictionary = {}
 var _hook_depth := 0
 var _hook_running: Dictionary = {}
-var _tut_chorus_due := false
+var _tut_order_due := false
 var tut  ## Tutorial instance (untyped: dynamic member access)
 
 # ------------------------------------------------------------------ presentation
@@ -121,8 +119,7 @@ var _banner: PanelContainer
 var _banner_lbl: Label
 var _fx_layer: CanvasLayer
 var _intent_pop := 0.0
-var _chorus_flash := 0.0
-var _chorus_dir := 0
+var _chain_flash := 0.0
 var _icon_flash: Dictionary = {}
 
 
@@ -212,9 +209,6 @@ func _setup_fight() -> void:
 		strand.append(_new_entry(String(id)))
 	reader = 0
 	bind_on = bool(Game.run.get("is_root", false)) and kind == "boss" and Game.graft_ready()
-	var med: Dictionary = Cards.REGION_MEDIUM.get(region, {})
-	var base_ch: int = int(med.get("chorus", 0))
-	chorus = clampi(base_ch + int(Game.run.get("pitch", 0)) + Adapt.mod("pitch"), 0, 9)
 
 
 ## Fray ≥ 5: two random non-junk genes overgrow. Returns how many did.
@@ -473,7 +467,14 @@ func _intro() -> void:
 		_say_log("You can feel what it means to do next.")
 		await _wait(0.8)
 	if bind_on:
-		await UI.say(["BIND: hold the core at 40% or less with Chorus 10 for 3 turns."], "see")
+		await UI.say(["BIND: hold the core at 40% or less and reach CHAIN x4, three turns running."], "see")
+	primer = clampi(int(Game.run.get("primer", 0)), 0, 5)
+	if primer > 0:
+		var pc := primer * BenchOps.PRIMER_COST
+		P["colony"] = maxi(1, int(P["colony"]) - pc)
+		_sync(P)
+		_float(P, "PRIMER -%d" % pc, UI.C_BAD)
+		_say_log("PRIMER: my first gene opens at CHAIN x%d." % primer)
 	await _run_hooks("fight_start")
 	if await _check_end():
 		return
@@ -492,27 +493,16 @@ func _player_turn_start() -> void:
 	busy = true
 	turn += 1
 	_hook_turn = {}
-	feedback_total = 0
 	lull = 0
-	lull_chorus = false
+	best_chain = 0
 	# Film clears (CLOTTING: half).
 	var pf: int = P["film"]
 	P["film"] = pf / 2 if region == "wound" else 0
 	await _tick_status(P, E)
 	if await _check_end():
 		return
-	# Chorus decay and tides.
-	if region != "hollow" and region != "root":
-		var dec := maxi(0, 1 + Adapt.mod("chorus_decay"))
-		if dec > 0:
-			await _chorus_add(-dec, "")
-	if region == "rivers":
-		if _surge():
-			_float(P, "SURGE", GeneArt.C_FILM)
-			await _chorus_add(2, "")
-		else:
-			_float(P, "EBB", C_QUIET)
-			await _chorus_add(-2, "")
+	if region == "rivers" and _surge():
+		_float(P, "SURGE: +1 READ", GeneArt.C_FILM)
 	elif region == "hollow":
 		_float(P, "INHALE" if _inhale() else "EXHALE", UI.C_THINK_FG)
 	# Charge and passives.
@@ -548,6 +538,10 @@ func _player_turn_start() -> void:
 		if _knot_next.has(int(ed["uid"])):
 			ed["knotted"] = true
 	_knot_next = {}
+	if primer > 0:
+		_prime(primer)
+		primer = 0
+	_apply_hold()
 	sel = clampi(sel, 0, maxi(0, win.size() - 1))
 	_reveal_intent()
 	_refresh()
@@ -588,11 +582,12 @@ func _tutorial_turn() -> void:
 		await tut.show_step("boost")
 	var mode_live := false
 	for e in win:
-		if _mode_for(Cards.card(String((e as Dictionary)["id"]))) != "":
+		var c: Dictionary = Cards.card(String((e as Dictionary)["id"]))
+		if c.has("deep") or c.has("lone"):
 			mode_live = true
-	if mode_live or _tut_chorus_due:
-		_tut_chorus_due = false
-		await tut.show_step("chorus")
+	if mode_live or _tut_order_due:
+		_tut_order_due = false
+		await tut.show_step("order")
 
 
 func _has_marks() -> bool:
@@ -835,6 +830,8 @@ func _reveal_intent() -> void:
 				_mark("gnaw", int(d.get("n", 1)))
 			"knot":
 				_mark("knot", int(d.get("n", 1)))
+			"sever":
+				_mark("sever", int(d.get("n", 1)))
 
 
 func _mark(what: String, n: int) -> void:
@@ -846,6 +843,10 @@ func _mark(what: String, n: int) -> void:
 		if bool(e["spent"]) or String(e["marked"]) != "":
 			continue
 		if what == "knot" and i < rn:
+			continue
+		if what == "sever" and i >= rn:
+			continue
+		if what == "sever" and Cards.is_junk(String(e["id"])):
 			continue
 		if Cards.is_junk(String(e["id"])):
 			junk.append(i)
@@ -882,14 +883,8 @@ func _fx_damage(fx: Array, src: Dictionary) -> int:
 				tot += _dmg_val(src, int(d.get("n", 0))) * maxi(1, int(d.get("k", 1)))
 			"drain", "stagger_dmg":
 				tot += _dmg_val(src, int(d.get("n", 0)))
-			"dmg_chorus":
-				tot += chorus * int(d.get("mult", 1))
-			"if_chorus":
-				if chorus >= int(d.get("min", 0)):
-					tot += _fx_damage(d.get("fx", []), src)
-			"if_band":
-				if _band() == String(d.get("band", "")):
-					tot += _fx_damage(d.get("fx", []), src)
+			"dmg_count":
+				tot += _dmg_val(src, int(d.get("per", 0)) * exp_count)
 	return tot
 
 
@@ -924,30 +919,38 @@ func _cant_express(slot: int) -> String:
 	return ""
 
 
+## LINKED: right after the last expressed gene (BRIDGE also across one gap), or the HELD gene
+## when nothing has been expressed yet this turn. A SEVERED gene is never linked into.
 func _linked(slot: int) -> bool:
-	return last_slot >= 0 and chain > 0 and slot == last_slot + 1
+	if chain <= 0 or slot < 0 or slot >= win.size():
+		return false
+	var e: Dictionary = win[slot]
+	if String(e["marked"]) == "sever":
+		return false
+	if last_slot < 0:
+		return int(e["uid"]) == carry_uid
+	if slot == last_slot + 1:
+		return true
+	return slot == last_slot + 2 and int(Cards.card(String(e["id"])).get("reach", 1)) + Adapt.mod("reach") >= 2
 
 
-func _mode_on(m: String) -> bool:
-	var b := _band()
-	if m == "loud":
-		return b == "loud" or (b == "hum" and Adapt.mod("loud_hum") > 0)
-	if m == "quiet":
-		return b == "quiet" or (b == "hum" and Adapt.mod("quiet_hum") > 0)
-	return false
+## Chain length at which DEEP takes over (HIVE MIND lowers it to x2).
+func _deep_at() -> int:
+	return maxi(2, 3 - Adapt.mod("deep_early"))
 
 
-## "loud"/"quiet" when the card's band-mode replaces its fx right now.
-func _mode_for(c: Dictionary) -> String:
-	for m in ["loud", "quiet"]:
-		if c.has(m) and _mode_on(m):
-			return m
+## "deep"/"lone" when that mode replaces the card's fx for this expression.
+func _mode_for(c: Dictionary, linked: bool, next_chain: int) -> String:
+	if linked and next_chain >= _deep_at() and c.has("deep"):
+		return "deep"
+	if not linked and c.has("lone"):
+		return "lone"
 	return ""
 
 
-func _gene_fx(id: String, linked: bool, first: bool) -> Array:
+func _gene_fx(id: String, linked: bool, first: bool, next_chain: int) -> Array:
 	var c: Dictionary = Cards.card(id)
-	var m := _mode_for(c)
+	var m := _mode_for(c, linked, next_chain)
 	var out: Array = []
 	var base: Array = c.get(m, []) if m != "" else c.get("fx", [])
 	out.append_array(base)
@@ -958,17 +961,33 @@ func _gene_fx(id: String, linked: bool, first: bool) -> Array:
 	return out.duplicate(true)
 
 
+## A slot's fx right now. TRACE resolves to the base fx of the gene on its left (spent or not).
+func _slot_fx(slot: int, linked: bool, first: bool, next_chain: int) -> Array:
+	var out := _gene_fx(String(win[slot]["id"]), linked, first, next_chain)
+	if not _fx_has(out, "trace"):
+		return out
+	var res: Array = []
+	for f in out:
+		if String((f as Dictionary).get("t", "")) != "trace":
+			res.append(f)
+		elif slot > 0:
+			var lid := String(win[slot - 1]["id"])
+			var lfx: Array = Cards.card(lid).get("fx", [])
+			if not Cards.is_junk(lid) and not _fx_has(lfx, "trace"):
+				res.append_array(lfx.duplicate(true))
+	return res
+
+
 func _bonus_for(slot: int, linked: bool, next_chain: int) -> int:
 	var e: Dictionary = win[slot]
 	var c: Dictionary = Cards.card(String(e["id"]))
 	var b := 0
 	if linked:
-		b += (next_chain - 1) * (1 + Adapt.mod("link_bonus"))
+		b += (next_chain - 1) * (1 + Adapt.mod("link_bonus") + (1 if region == "root" else 0))
 	var g: int = int(c.get("grows", 0))
 	if g > 0:
 		b += g * int(_grows.get(int(e["uid"]), 0))
 	return maxi(0, b)
-
 
 ## Adds `add` and multiplies by `mult` (ceil) on the numeric keys of each fx.
 func _scaled(fx: Array, add: int, mult: float) -> Array:
@@ -983,8 +1002,6 @@ func _scaled(fx: Array, add: int, mult: float) -> Array:
 					var v: int = int(d[key])
 					if v > 0:
 						d[key] = int(ceil((v + add) * mult))
-		if t == "dmg_chorus" and mult > 1.0:
-			d["mult"] = int(ceil(int(d.get("mult", 1)) * mult))
 		if d.has("fx") and d["fx"] is Array:
 			d["fx"] = _scaled(d["fx"], add, mult)
 		out.append(d)
@@ -1015,19 +1032,20 @@ func _express(slot: int) -> void:
 	free_next = false
 	var linked := _linked(slot)
 	var next_chain := chain + 1 if linked else 1
+	var snap := 0 if linked or chain < 2 else chain
 	var first := exp_count == 0
 	var bonus := _bonus_for(slot, linked, next_chain)
 	var times := 1
 	if promote_from >= 0 and slot == promote_from + 1:
 		times += 1
 		_float(P, "PROMOTED", UI.C_ACCENT, Vector2(0, -10))
-	promote_from = -1
-	var res_used := false
-	if resonant_p:
+	if exp_count == 2 and Adapt.mod("third") > 0:
 		times += 1
-		res_used = true
-		resonant_p = false
+		_float(P, "3RD: TWICE", UI.C_ACCENT, Vector2(0, -20))
+	promote_from = -1
 	chain = next_chain
+	best_chain = maxi(best_chain, chain)
+	carry_uid = -1
 	e["spent"] = true
 	e["marked"] = ""
 	last_slot = slot
@@ -1049,7 +1067,7 @@ func _express(slot: int) -> void:
 	if linked and chain >= 2:
 		_sfx("link", 1.0 + 0.12 * chain)
 		_pop_ui(_tile_center(slot) + Vector2(0, -24), "LINK x%d!" % chain, UI.C_ACCENT, 2 if chain >= 3 else 1)
-	var fx := _scaled(_gene_fx(id, linked, first), bonus, mult)
+	var fx := _scaled(_slot_fx(slot, linked, first, next_chain), bonus, mult)
 	var tgt := _fx_target_is_enemy(fx)
 	await _fly_card(slot, E if tgt else P)
 	var title := String(c["name"])
@@ -1065,6 +1083,8 @@ func _express(slot: int) -> void:
 	last_fx = fx
 	if trait_id == "spines" and not _dead() and _damages(fx):
 		await _lose(P, 1, "SPINES")
+	if snap > 0 and not _dead():
+		await _snap(snap)
 	if bool(c.get("burn", false)):
 		_strand_remove_burn(uid)
 	if Cards.is_green(id):
@@ -1074,10 +1094,12 @@ func _express(slot: int) -> void:
 	await _run_hooks("express")
 	if linked and chain >= 2:
 		await _run_hooks("link")
+	if linked and chain >= _deep_at():
+		await _run_hooks("deep")
+	elif not linked:
+		await _run_hooks("lone")
 	if clean:
 		await _run_hooks("clean")
-	if res_used:
-		await _res_drop()
 	if await _check_end():
 		return
 	_auto_select()
@@ -1137,8 +1159,6 @@ func _dmg_val(src: Dictionary, n: int) -> int:
 	if String(src["side"]) == "p":
 		v += Adapt.mod("dmg")
 	else:
-		if trait_id == "listener" and chorus >= 6:
-			v += 3
 		v -= lull
 	if _exhale():
 		v = int(ceil(v * 1.5))
@@ -1154,14 +1174,17 @@ func _film_val(src: Dictionary, n: int) -> int:
 	return maxi(0, v)
 
 
-## Chorus-fed damage (sing/feedback/dmg_chorus): DEAF halves it.
-func _chorus_dmg(dst: Dictionary, n: int) -> int:
-	var v := n
-	if _exhale():
-		v = int(ceil(v * 1.5))
-	if String(dst["side"]) == "e" and trait_id == "deaf":
-		v = v / 2
-	return maxi(0, v)
+## Expressing out of order while CHAIN is x2+ SNAPS it. Some enemies answer that.
+func _snap(n: int) -> void:
+	_float(P, "SNAP x%d" % n, UI.C_WARN, Vector2(0, -16))
+	_sfx("mark")
+	match trait_id:
+		"riposte":
+			await _lose(P, 3, "RIPOSTE")
+		"discord":
+			_heal(E, 5)
+			_float(E, "DISCORD", C_SEVER, Vector2(0, -12))
+	await _run_hooks("snap")
 
 
 func _apply(fx: Array, src: Dictionary, dst: Dictionary, ctx: Dictionary) -> void:
@@ -1206,43 +1229,42 @@ func _apply(fx: Array, src: Dictionary, dst: Dictionary, ctx: Dictionary) -> voi
 				(dst["rot"] as Array).append({"n": n, "t": int(f.get("turns", 3))})
 				_float(dst, "ROT %d" % n, ROT_COL)
 				_sfx("rot")
-			"chorus":
-				await _chorus_add(n, side)
-			"chorus_set":
-				await _chorus_add(n - chorus, side)
-			"sing":
-				var spent := chorus
-				if spent > 0:
-					await _chorus_add(-spent, side, true)
-					await _hit(src, dst, _chorus_dmg(dst, int(f.get("per", 1)) * spent), ctx)
-			"silence":
-				var removed := chorus
-				await _chorus_add(-removed, side, true)
-				if removed > 0:
-					_gain_film(src, _film_val(src, int(f.get("per", 1)) * removed))
-			"feedback":
-				var fb := int(f.get("per", 1)) * feedback_total
-				_float(src, "FEEDBACK %d" % feedback_total, GeneArt.C_CHORUS, Vector2(0, -12))
-				await _hit(src, dst, _chorus_dmg(dst, fb), ctx)
-			"dmg_chorus":
-				await _hit(src, dst, _chorus_dmg(dst, chorus * int(f.get("mult", 1))), ctx)
-			"if_chorus":
-				if chorus >= int(f.get("min", 0)):
-					await _apply(f.get("fx", []), src, dst, ctx)
-			"if_band":
-				if _band() == String(f.get("band", "")).to_lower():
-					await _apply(f.get("fx", []), src, dst, ctx)
 			"lull":
 				if mine:
 					lull += n
-					lull_chorus = true
-					_float(dst, "LULLED -%d" % n, C_QUIET)
-			"steal_chorus":
-				var taken := mini(n, chorus)
-				if taken > 0:
-					await _chorus_add(-taken, side, true)
-					src["film"] = int(src["film"]) + taken
-					_float(src, "STEALS %d" % taken, GeneArt.C_CHORUS)
+					_float(dst, "LULLED -%d" % n, UI.C_ACCENT)
+			"chain":
+				if mine:
+					chain += n
+					best_chain = maxi(best_chain, chain)
+					_float(P, "CHAIN x%d" % chain, C_HI)
+					_chain_flash = 1.0
+			"prime":
+				if mine:
+					if last_slot < 0 and (carry_uid < 0 or chain <= 0):
+						_prime(n)
+						_apply_hold()
+					else:
+						chain += n
+						_float(P, "CHAIN x%d" % chain, C_HI)
+					best_chain = maxi(best_chain, chain)
+					_chain_flash = 1.0
+			"unmark":
+				if mine:
+					var cleared := 0
+					for e in win:
+						if String((e as Dictionary)["marked"]) != "":
+							(e as Dictionary)["marked"] = ""
+							cleared += 1
+					_float(P, "MARKS CLEARED %d" % cleared, UI.C_ACCENT)
+			"dmg_count":
+				var cnt := maxi(0, exp_count - 1) if mine else 0
+				_float(src, "COUNT %d" % cnt, C_HI, Vector2(0, -12))
+				if cnt > 0:
+					await _hit(src, dst, _dmg_val(src, int(f.get("per", 0)) * cnt), ctx)
+			"latent":
+				(dst["latent"] as Array).append({"n": n, "t": int(f.get("turns", 2))})
+				_float(dst, "LATENT %d" % n, GeneArt.C_DMG)
 			"charge":
 				if mine:
 					charge += n
@@ -1271,6 +1293,7 @@ func _apply(fx: Array, src: Dictionary, dst: Dictionary, ctx: Dictionary) -> voi
 					else:
 						await _hit(src, dst, _dmg_val(src, amt), ctx)
 					chain = 0
+					carry_uid = -1
 			"splice":
 				if mine:
 					splices += n
@@ -1295,12 +1318,6 @@ func _apply(fx: Array, src: Dictionary, dst: Dictionary, ctx: Dictionary) -> voi
 				if mine and ctx.has("uid"):
 					_strand_remove_burn(int(ctx["uid"]))
 					_float(P, "CLEARED", UI.C_ACCENT)
-			"drifter":
-				if chorus < 5:
-					await _hit(src, dst, _dmg_val(src, int(f.get("burst", 0))), ctx)
-				else:
-					(dst["latent"] as Array).append({"n": int(f.get("latent", 0)), "t": int(f.get("turns", 2))})
-					_float(dst, "LATENT", GeneArt.C_DMG)
 			"hop":
 				if mine:
 					_hop(ctx, int(f.get("ahead", 1)))
@@ -1521,95 +1538,6 @@ func _tick_status(a: Dictionary, other: Dictionary) -> void:
 	a["latent"] = keep2
 
 
-# ------------------------------------------------------------------ chorus
-
-func _band_of(v: int) -> String:
-	if v <= 3:
-		return "quiet"
-	if v <= 6:
-		return "hum"
-	return "loud"
-
-
-func _band() -> String:
-	return _band_of(chorus)
-
-
-func _band_color(b: String) -> Color:
-	match b:
-		"quiet":
-			return C_QUIET
-		"loud":
-			return C_LOUD
-	return C_HUM
-
-
-## Every Chorus change goes through here. side "p"/"e" may resonate; "" never does.
-func _chorus_add(n: int, side: String, no_res := false) -> void:
-	if n == 0 or over:
-		return
-	if side == "e" and n > 0 and lull_chorus:
-		_float(E, "LULLED", C_QUIET, Vector2(0, -20))
-		return
-	var old := chorus
-	chorus = clampi(chorus + n, 0, 10)
-	var d := chorus - old
-	if d == 0:
-		return
-	feedback_total += absi(d)
-	_chorus_flash = 1.0
-	_chorus_dir = signi(d)
-	_sfx("chorus", 0.8 + 0.05 * chorus)
-	if side != "":
-		_float(P if side == "p" else E, "CHORUS %+d" % d, GeneArt.C_CHORUS, Vector2(0, -22))
-	_refresh()
-	if _band_of(old) != _band_of(chorus):
-		await _band_shift()
-	if chorus == 10 and d > 0 and not no_res and side != "":
-		await _resonate(side)
-	_refresh()
-
-
-func _band_shift() -> void:
-	var b := _band()
-	_sfx("shift", 1.2 if b == "loud" else (0.8 if b == "quiet" else 1.0))
-	_pop_ui(Vector2(CHORUS_BOX.position.x + 90, CHORUS_BOX.position.y + 30), b.to_upper(), _band_color(b), 1)
-	if UI.has_method("pulse"):
-		UI.pulse(_band_color(b), 0.3)
-	_tut_chorus_due = true
-	await _run_hooks("shift")
-
-
-func _resonate(side: String) -> void:
-	if side == "p":
-		if resonant_p:
-			return
-		resonant_p = true
-		_sfx("resonance")
-		UI.flash(Color(1.0, 0.95, 0.6), 0.3)
-		_juice_call("shake", [_cam, 0.2, 0.4])
-		_say_log("IT HEARS YOU. Your next gene fires twice.")
-		await _announce("RESONANCE!", "p", 0.8)
-		await _run_hooks("resonate")
-	else:
-		if resonant_e:
-			return
-		resonant_e = true
-		_sfx("resonance", 0.7)
-		_say_log("It resonates. Its next intent lands twice.")
-		await _announce("%s RESONATES" % E["name"], "e", 0.8)
-		if trait_id == "choirmaster":
-			_heal(E, 8)
-	_refresh()
-
-
-## After a resonance is spent: Chorus falls to 5 (never in the root).
-func _res_drop() -> void:
-	if region == "root" or chorus <= 5:
-		return
-	await _chorus_add(5 - chorus, "", true)
-
-
 # ------------------------------------------------------------------ hooks
 
 func _run_hooks(hname: String) -> void:
@@ -1662,14 +1590,11 @@ func _check_end() -> bool:
 func _end_turn() -> void:
 	busy = true
 	_sfx("confirm")
-	if resonant_p:
-		resonant_p = false
-		await _res_drop()
 	await _run_hooks("turn_end")
 	if await _check_end():
 		return
 	if bind_on:
-		if float(E["colony"]) <= float(E["max"]) * 0.4 and chorus >= 10:
+		if float(E["colony"]) <= float(E["max"]) * 0.4 and best_chain >= 4:
 			bind += 1
 			_say_log("BIND %d/3. THE CORE GOES STILL." % bind)
 			await _announce("BIND %d/3" % bind, "p", 0.8)
@@ -1687,6 +1612,7 @@ func _end_turn() -> void:
 			marks.append({"uid": int(ed["uid"]), "id": String(ed["id"]), "kind": String(ed["marked"])})
 	var sweep := _sweep_now()
 	var rn := win.size() if sweep else mini(_read_n(), win.size())
+	await _set_hold(rn)
 	if sweep:
 		_sfx("skip", 0.7)
 		await _announce("SWEEP: THE WINDOW IS READ", "e", 0.7)
@@ -1694,6 +1620,55 @@ func _end_turn() -> void:
 	if await _check_end():
 		return
 	await _enemy_turn(marks)
+
+
+## HOLD: if the gene right of your last expression sits in NEXT (it survives the READ),
+## the chain waits for it. Expressing it first next turn keeps the chain going.
+func _set_hold(rn: int) -> void:
+	if exp_count == 0 and carry_uid >= 0:
+		return
+	carry_uid = -1
+	carry_chain = 0
+	var s := last_slot + 1
+	if chain <= 0 or last_slot < 0 or s < rn or s >= win.size():
+		return
+	var e: Dictionary = win[s]
+	var c: Dictionary = Cards.card(String(e["id"]))
+	if bool(e["spent"]) or Cards.is_junk(String(e["id"])) or String(c.get("kind", "gene")) == "passive":
+		return
+	if trait_id == "blank":
+		_float(P, "BLANK: NO HOLD", C_SEVER, Vector2(0, -12))
+		return
+	carry_uid = int(e["uid"])
+	carry_chain = chain
+	_pop_ui(_tile_center(s) + Vector2(0, -14), "HOLD x%d" % chain, C_HI, 1)
+	await _run_hooks("hold")
+
+
+## Turn start: a HELD chain resumes while its gene is still in the window.
+func _apply_hold() -> void:
+	if carry_uid < 0:
+		return
+	for e in win:
+		var ed: Dictionary = e
+		if int(ed["uid"]) == carry_uid and not bool(ed["spent"]):
+			chain = carry_chain + Adapt.mod("hold_bonus")
+			_float(P, "HELD x%d" % chain, C_HI, Vector2(0, -12))
+			_tut_order_due = true
+			return
+	carry_uid = -1
+
+
+## PRIMER: the fight's first real gene starts HELD at chain xN (it can't go ALONE).
+func _prime(n: int) -> void:
+	for e in win:
+		var ed: Dictionary = e
+		var id := String(ed["id"])
+		if bool(ed["spent"]) or Cards.is_junk(id) or String(Cards.card(id).get("kind", "gene")) == "passive":
+			continue
+		carry_uid = int(ed["uid"])
+		carry_chain = n
+		return
 
 
 ## READ: slots [0, rn) and every spent gene leave. Unexpressed leavers are SKIPPED.
@@ -1776,15 +1751,8 @@ func _enemy_turn(marks: Array) -> void:
 		await _announce("%s: RECORDED. IT FIZZLES." % it["name"], "p", 0.7)
 	else:
 		acted = true
-		var twice := resonant_e
-		resonant_e = false
-		await _announce("%s: %s%s" % [E["name"], it["name"], " x2" if twice else ""], "e", 0.6)
-		for k in (2 if twice else 1):
-			if _dead():
-				break
-			await _apply(it.get("fx", []), E, P, {"intent": true})
-		if twice:
-			await _res_drop()
+		await _announce("%s: %s" % [E["name"], it["name"]], "e", 0.6)
+		await _apply(it.get("fx", []), E, P, {"intent": true})
 	if await _check_end():
 		return
 	if acted:
@@ -1801,7 +1769,7 @@ func _enemy_turn(marks: Array) -> void:
 					await _pact(Cards.card(gid))
 					if await _check_end():
 						return
-			else:
+			elif String(md["kind"]) == "knot":
 				_knot_next[uid] = true
 				_sfx("knot")
 				_float(P, "KNOTTED", UI.C_WARN, Vector2(0, -20))
@@ -1843,10 +1811,6 @@ func _win(result: String) -> void:
 		await _announce("%s BREAKS APART." % E["name"], "p", 1.0)
 	_sfx("win")
 	Game.run["colony"] = int(P["colony"])
-	if chorus >= 7:
-		Game.run["uptake"] = int(Game.run.get("uptake", 0)) + 1
-		UI.toast("IT HEARD ITSELF. +1 UPTAKE", C_LOUD)
-		await _wait(0.8)
 	if kind != "boss":
 		var gain := 5 if kind == "elite" else randi_range(2, 3)
 		Game.run["reagent"] = int(Game.run.get("reagent", 0)) + gain
@@ -1905,8 +1869,6 @@ func _run_hooks_after_win(hname: String) -> void:
 					_float(P, "+%d" % n, UI.C_GREEN)
 				"film", "charge", "charge_next":
 					pass
-				"chorus":
-					chorus = clampi(chorus + n, 0, 10)
 		_refresh()
 		await _wait(0.3)
 
@@ -2245,7 +2207,7 @@ func _process(dt: float) -> void:
 		_cam.position = CAM_POS + Vector3(sin(_t * 0.31) * 0.12, sin(_t * 0.23) * 0.06, cos(_t * 0.27) * 0.08)
 		_cam.look_at(CAM_LOOK + Vector3(sin(_t * 0.19) * 0.08, 0, 0))
 	_intent_pop = maxf(0.0, _intent_pop - dt * 2.0)
-	_chorus_flash = maxf(0.0, _chorus_flash - dt * 1.5)
+	_chain_flash = maxf(0.0, _chain_flash - dt * 1.5)
 	if _msg_t > 0.0:
 		_msg_t = maxf(0.0, _msg_t - dt)
 	for k in _icon_flash.keys():
@@ -2290,8 +2252,10 @@ func _refresh() -> void:
 		var spent: bool = e["spent"]
 		var cost := _cost_of(i)
 		t.call("set_card", id, spent, spent or cost <= charge, cost)
+		var lk := not spent and _linked(i)
 		t.call("set_state", {"marked": String(e["marked"]), "knotted": bool(e["knotted"]), "faded": _faded(i),
-			"mode": _mode_for(c), "link": not spent and _linked(i), "next": i >= rn, "ghost": ""})
+			"mode": "" if spent else _mode_for(c, lk, chain + 1 if lk else 1), "link": lk, "next": i >= rn,
+			"held": lk and last_slot < 0, "ghost": ""})
 		t.call("set_selected", i == sel and not over)
 	var can := not busy and not over
 	_end_btn.call("set_selected", false)
@@ -2322,7 +2286,7 @@ func _desc_text() -> String:
 	var c: Dictionary = Cards.card(id)
 	var linked := _linked(sel)
 	var first := exp_count == 0
-	var mode := _mode_for(c)
+	var mode := _mode_for(c, linked, chain + 1 if linked else 1)
 	var head := "[color=%s]%s[/color]  %dC" % [_hex(GeneArt.gene_color(id)), String(c["name"]), _cost_of(sel)]
 	var tags: Array = []
 	if bool(e["knotted"]):
@@ -2331,6 +2295,10 @@ func _desc_text() -> String:
 		tags.append("MARKED: GNAW")
 	elif String(e["marked"]) == "knot":
 		tags.append("MARKED: KNOT")
+	elif String(e["marked"]) == "sever":
+		tags.append("SEVERED")
+	if linked and last_slot < 0:
+		tags.append("HELD x%d" % chain)
 	if bool(c.get("burn", false)):
 		tags.append("BURN")
 	if bool(c.get("breaker", false)):
@@ -2345,8 +2313,8 @@ func _desc_text() -> String:
 	body = _hl(body, "LINK:", linked)
 	body = _hl(body, "FIRST:", first)
 	body = _hl(body, "DORMANT:", false)
-	body = _hl(body, "LOUD:", mode == "loud")
-	body = _hl(body, "QUIET:", mode == "quiet")
+	body = _hl(body, "DEEP:", mode == "deep")
+	body = _hl(body, "ALONE:", mode == "lone")
 	var now := _preview(sel)
 	if now != "":
 		head += "  [color=%s]%s[/color]" % [_hex(UI.C_ACCENT), now]
@@ -2356,7 +2324,7 @@ func _desc_text() -> String:
 func _hl(s: String, key: String, on: bool) -> String:
 	if s.find(key) < 0:
 		return s
-	var col := C_LOUD if on else UI.C_DIM
+	var col := C_HI if on else UI.C_DIM
 	return s.replace(key, "[color=%s]%s[/color]" % [_hex(col), key])
 
 
@@ -2370,7 +2338,7 @@ func _preview(slot: int) -> String:
 		return ""
 	var linked := _linked(slot)
 	var nc := chain + 1 if linked else 1
-	var fx := _scaled(_gene_fx(String(e["id"]), linked, exp_count == 0), _bonus_for(slot, linked, nc), 1.0)
+	var fx := _scaled(_slot_fx(slot, linked, exp_count == 0, nc), _bonus_for(slot, linked, nc), 1.0)
 	var parts: Array = []
 	var d := _fx_damage(fx, P)
 	if d > 0:
@@ -2384,6 +2352,8 @@ func _preview(slot: int) -> String:
 				fl += _film_val(P, int(fd.get("n", 0)))
 			"heal":
 				hl += int(fd.get("n", 0))
+			"latent":
+				parts.append("LATENT %d" % int(fd.get("n", 0)))
 	if fl > 0:
 		parts.append("FILM %d" % fl)
 	if hl > 0:
@@ -2463,8 +2433,6 @@ func _draw_hud() -> void:
 			line += "  %d" % dm
 		var lc := UI.C_DIM if _recorded(it) or staggered else UI.C_THINK_FG
 		_txt(Vector2(ix, iy + 3), line, lc, int(INTENT_BOX.size.x) - 8)
-		if resonant_e and not staggered:
-			_txt_r(INTENT_BOX.end.x - 4, iy - 9, "x2 RESONANT", C_LOUD)
 		if wind:
 			_txt(Vector2(ix, iy + 14), "BREAK", UI.C_WARN)
 			var bw := 100.0
@@ -2476,35 +2444,37 @@ func _draw_hud() -> void:
 			_txt_r(INTENT_BOX.end.x - 4, iy + 14, "%d" % maxi(0, break_need - break_progress), UI.C_WARN)
 		elif not _recorded(it) and not staggered:
 			_txt(Vector2(ix, iy + 14), _intent_extra(it), UI.C_DIM, int(INTENT_BOX.size.x) - 8)
-	# --- chorus
-	var cb := _band_color(_band())
-	_box(CHORUS_BOX, true, cb.lerp(Color.WHITE, _chorus_flash * 0.6))
-	var cx := CHORUS_BOX.position.x + 4
-	var cy := CHORUS_BOX.position.y
-	var arrow := ""
-	if _chorus_flash > 0.0:
-		arrow = " ^" if _chorus_dir > 0 else " v"
-	_txt(Vector2(cx, cy + 2), "CHORUS %d %s%s" % [chorus, _band().to_upper(), arrow], cb.lerp(Color.WHITE, 0.3))
-	if resonant_p:
-		_txt_r(CHORUS_BOX.end.x - 4, cy + 2, "x2", C_LOUD)
+	# --- order: chain pips (DEEP from _deep_at), HELD, region rule
+	var held := chain > 0 and last_slot < 0
+	var oc := C_HI if held or chain >= _deep_at() else UI.C_ACCENT
+	_box(ORDER_BOX, true, oc.lerp(Color.WHITE, _chain_flash * 0.6))
+	var cx := ORDER_BOX.position.x + 4
+	var cy := ORDER_BOX.position.y
+	var head := "CHAIN -" if chain <= 0 else ("HELD x%d" if held else "CHAIN x%d") % chain
+	_txt(Vector2(cx, cy + 2), head, oc.lerp(Color.WHITE, 0.3))
+	_txt_r(ORDER_BOX.end.x - 4, cy + 2, "DEEP x%d" % _deep_at(), C_HI.darkened(0.35))
 	for s in 10:
 		var sr := Rect2(cx + s * 17, cy + 13, 15, 4)
-		var on := s < chorus
-		var sc := _band_color(_band_of(s + 1)) if on else Color(0.12, 0.14, 0.16)
-		_hud.draw_rect(sr, sc)
-	_txt(Vector2(cx, cy + 19), _medium_line(), UI.C_DIM, int(CHORUS_BOX.size.x) - 8)
+		var deep := s + 1 >= _deep_at()
+		if s < chain:
+			_hud.draw_rect(sr, C_HI if deep else UI.C_ACCENT)
+		else:
+			_hud.draw_rect(sr, Color(0.12, 0.14, 0.16))
+			if deep:
+				_hud.draw_rect(sr, C_HI.darkened(0.6), false, 1.0)
+	_txt(Vector2(cx, cy + 19), _medium_line(), UI.C_DIM, int(ORDER_BOX.size.x) - 8)
 	# --- adaptations + syringes
-	var ax := CHORUS_BOX.position.x
+	var ax := ORDER_BOX.position.x
 	for aid0 in Adapt.owned():
 		var aid: String = String(aid0)
 		var fl: float = float(_icon_flash.get(aid, 0.0))
 		var col := UI.C_ACCENT.lerp(Color.WHITE, fl)
 		GeneArt.bitmap(_hud, Vector2(ax, ICON_Y + (0 if fl <= 0.0 else -1)), Adapt.icon(aid), col, 1)
 		ax += 9
-		if ax > CHORUS_BOX.end.x - 40:
+		if ax > ORDER_BOX.end.x - 40:
 			break
 	var bs: Array = Game.run.get("boosters", [])
-	var sx := CHORUS_BOX.end.x - 4
+	var sx := ORDER_BOX.end.x - 4
 	for b in bs:
 		var inf: Dictionary = Boosters.info(String(b))
 		var bc: Color = inf.get("color", UI.C_ACCENT)
@@ -2513,8 +2483,6 @@ func _draw_hud() -> void:
 		_hud.draw_rect(Rect2(sx + 1, ICON_Y + 3, 8, 2), bc)
 		_hud.draw_rect(Rect2(sx + 10, ICON_Y + 3, 3, 1), Color(0.8, 0.8, 0.85))
 	# status lines live in the empty strip under the intent box, clear of the enemy
-	if _band() == "loud":
-		_txt(Vector2(4, 76), "LOUD: +1 UPTAKE IF IT ENDS", C_LOUD)
 	var ld: Array = Game.run.get("ledger", [])
 	var sline := ""
 	if not ld.is_empty():
@@ -2522,7 +2490,7 @@ func _draw_hud() -> void:
 	if bind_on:
 		sline += ("  " if sline != "" else "") + "BIND %d/3" % bind
 	if sline != "":
-		_txt(Vector2(4, 86), sline, C_LOUD if bind_on else UI.C_ACCENT)
+		_txt(Vector2(4, 86), sline, C_HI if bind_on else UI.C_ACCENT)
 	# --- player
 	_box(PLAYER_BOX, false)
 	var px := PLAYER_BOX.position.x + 4
@@ -2532,8 +2500,6 @@ func _draw_hud() -> void:
 	var fray_s := "FRAY %d" % int(Game.run.get("fray", 0))
 	_txt_r(PLAYER_BOX.end.x - 4, py + 15, fray_s, UI.C_WARN.darkened(0.3))
 	var pline := "C%d S%d" % [charge, splices]
-	if chain >= 2:
-		pline += " CHAIN %d" % chain
 	if free_next:
 		pline += " FREE"
 	var pst := _status_text(P)
@@ -2591,10 +2557,8 @@ func _intent_extra(it: Dictionary) -> String:
 				parts.append("DRAINS")
 			"film":
 				parts.append("FILM %d" % n)
-			"chorus":
-				parts.append("CHORUS %+d" % n)
-			"steal_chorus":
-				parts.append("STEALS CHORUS")
+			"sever":
+				parts.append("SEVERS %d" % n)
 			"scramble":
 				parts.append("SCRAMBLES")
 			"mimic_last":
@@ -2611,7 +2575,7 @@ func _medium_line() -> String:
 	var s := String(med.get("name", ""))
 	match region:
 		"rivers":
-			s = "SURGE NOW, EBB NEXT" if _surge() else "EBB NOW, SURGE NEXT"
+			s = "SURGE: +1 READ" if _surge() else "CURRENT: SURGE NEXT"
 		"hollow":
 			s = "INHALE: FILM x1.5" if _inhale() else "EXHALE: DMG x1.5"
 		"wound":
@@ -2619,7 +2583,7 @@ func _medium_line() -> String:
 		"archive":
 			s += ": NEXT HIDDEN"
 		"root":
-			s += ": NO DECAY"
+			s += ": LINK +2"
 	return s
 
 
@@ -2689,5 +2653,5 @@ func _help() -> void:
 		"Express a gene right of the last: LINK. Chains grow.",
 		"Press in the band: CLEAN, x1.5. Q splices, R mutates.",
 		"Fill the BREAK bar to stagger a wind-up. F injects.",
-		"Chorus 10 resonates: the next act fires twice."], "see")
+		"Chain into NEXT before END: it HOLDS to next turn."], "see")
 	_modal = false
